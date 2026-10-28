@@ -38,6 +38,9 @@ def _job_dir(job_id):
 
 
 def _list_jobs():
+    if not os.path.isdir(JOBS):
+        os.makedirs(JOBS, exist_ok=True)
+        return []
     out = []
     for jid in sorted(os.listdir(JOBS), reverse=True):
         meta = os.path.join(JOBS, jid, "meta.json")
