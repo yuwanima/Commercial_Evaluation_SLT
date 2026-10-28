@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>SSET Report Processor</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="{{ url_for('static', filename='index.css') }}">
+</head>
+<body>
+    <main>
+        <h1>SSET Evaluation Report → Editable Excel Tables</h1>
+        {% with m = get_flashed_messages() %}{% for x in m %}<div class="flash">{{ x }}</div>{% endfor %}{% endwith %}
+        <div class="card">
+        <form method="post" action="{{ url_for('process') }}" enctype="multipart/form-data">
+            <p><b>1.</b> Select one or more SSET reports (.docx)</p>
+            <input type="file" name="reports" accept=".docx" multiple required>
+            <p><b>2.</b> <button class="btn" type="submit">Process</button></p>
+        </form>
+    </div>
+
+    <div class="card"><b>Processed reports</b>
+    {% if not jobs %}<p><small>Nothing processed yet.</small></p>{% else %}
+    <table><tr><th>When</th><th>Report(s)</th><th></th></tr>
+    {% for j in jobs %}<tr><td>{{ j.time }}</td>
+    <td>{% for r in j.reports %}{{ r.file }} <small>({{ r.fields }} fields, {{ r.bidders }} bidder(s))</small><br>
+        {% for n in r.notes %}<small>⚠ {{ n }}</small><br>{% endfor %}{% endfor %}</td>
+        <td><a class="btn alt" href="{{ url_for('view', job_id=j.id) }}">View</a></td></tr>{% endfor %}</table>
+    {% endif %}
+    </div>
+    </main>
+</body>
+</html>

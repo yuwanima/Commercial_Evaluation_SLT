@@ -1,0 +1,12 @@
+﻿# Environment secrets
+Backend/.env
+.env
+
+# Python-generated files
+__pycache__/
+*.py[cod]
+
+# Local application data and proprietary documents
+Backend/storage/
+Backend/documents/
+Backend/documents/**/*.pdf
