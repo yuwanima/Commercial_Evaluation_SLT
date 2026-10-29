@@ -90,11 +90,13 @@ def _clean(s):
     return re.sub(r"[ \t\u00a0]+", " ", s or "").strip()
 
 
-def match_label(line, last_key=None):
+def match_label(line, last_key=None, labels=None):
     """Return (key, remainder) if the line starts with a known label."""
     s = PREFIX.sub("", line, count=1).strip()
     low = s.lower()
-    for key, rx in LABELS:
+    if labels is None:
+        labels = LABELS
+    for key, rx in labels:
         m = rx.match(low)
         if not m:
             continue
@@ -113,6 +115,18 @@ def match_label(line, last_key=None):
 def _is_placeholder(v):
     v = v.strip()
     return (not v) or v in {"-", "–", "—", "N/A?"} or (v.startswith("(") and v.endswith(")") and ("/" in v or "if any" in v.lower()))
+
+
+def is_template_text(line, labels=None):
+    """Check if a line represents template guidance, boilerplate or placeholder text."""
+    s = _clean(line)
+    if not s:
+        return True
+    if _is_placeholder(s) or GUIDANCE.search(s) or NUMBERING_ONLY.match(s):
+        return True
+    if s.startswith("(") and s.endswith(")") and ("/" in s or "if any" in s.lower() or "e.g." in s.lower()):
+        return True
+    return False
 
 
 # --------------------------------------------------------------------------

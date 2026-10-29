@@ -1,22 +1,51 @@
-body{
+:root {
+    --c: #1F3864;
+}
+
+body.tet {
+    --c: #0B6E4F;
+}
+
+ body{
     font-family:Arial,sans-serif;
     background:#f4f6fa;
     margin:0;
     color:#222
 }
 
-main{
-    max-width:860px;
-    margin:32px auto;
+ main{
+    max-width:880px;
+    margin:24px auto;
     padding:0 16px
 }
-    
-h1{
-    font-size:22px;
-    color:#1F3864
+
+ h1{
+    font-size:21px;
+    color:var(--c);
+    margin:18px 0
 }
 
-.card{
+ .tabs{
+    display:flex;
+    gap:6px;
+    border-bottom:3px solid var(--c)
+}
+
+ .tabs a{
+    padding:10px 26px;
+    text-decoration:none;
+    color:#444;
+    background:#e3e7ef;
+    border-radius:8px 8px 0 0;
+    font-weight:bold
+}
+
+ .tabs a.on{
+    background:var(--c);
+    color:#fff
+
+}
+ .card{
     background:#fff;
     border-radius:8px;
     padding:20px;
@@ -24,8 +53,8 @@ h1{
     box-shadow:0 1px 3px #0002
 }
 
-.btn{
-    background:#1F3864;
+ .btn{
+    background:var(--c);
     color:#fff;
     border:0;
     border-radius:5px;
@@ -36,30 +65,30 @@ h1{
     display:inline-block
 }
 
-.btn.alt{
+ .btn.alt{
     background:#2e7d32
 }
 
-.flash{
+ .flash{
     background:#fff8e1;
     border-left:4px solid #f9a825;
     padding:10px 14px;
-    margin-bottom:16px
+    margin:16px 0
 }
 
-table{
+ table{
     width:100%;
     border-collapse:collapse;
-    font-size:14px
+    font-size:14px;
 }
 
 th,td{
     text-align:left;
-    padding:8px;
-    border-bottom:1px solid #ddd;
-    vertical-align:top
+        padding:8px;
+        border-bottom:1px solid #ddd;
+        vertical-align:top
 }
 
-small{
+ small{
     color:#666
 }
