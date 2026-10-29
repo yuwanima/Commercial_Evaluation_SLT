@@ -83,7 +83,7 @@ def _find_bidder_prefix(line, bidders):
         if 0 <= i < len(bidders):
             rest = m.group(2)
             nm = _norm(bidders[i].get("name", ""))
-            if nm and _norm(rest).startswith(nm):      # "Bidder 1: ABC Power (Pvt) Ltd" -> name is part of the heading
+            if nm and _norm(rest).startswith(nm):      
                 words = nm.split()
                 rest = re.sub(r"^\W*" + r"\W+".join(re.escape(w) for w in words) + r"\W*", "", rest, count=1, flags=re.I)
                 rest = re.sub(r"^[\s:\-–—=\)]+", "", rest)
@@ -140,7 +140,7 @@ def extract_tet(path):
     cur = last = None
     section, stopped = None, False
     section_text = {"introduction": [], "background": []}
-    matrix = None        # {col_index: bidder_index}
+    matrix = None        
     in_sign = False
     sign_map = {}
 
@@ -247,19 +247,19 @@ def extract_tet(path):
                 section, cur, ctx = sm.group(1).lower(), None, None
                 continue
 
-            # B: "Bidder 2: XYZ" / "XYZ Energy" heading (a bidder name not followed by a label)
+
             key, rest = match_label(ln, last, TET_LABELS)
             if key is None and bidders:
                 i, rem = _find_bidder_prefix(ln, bidders)
                 if i is not None:
                     k2, r2 = match_label(rem, last, TET_LABELS) if rem else (None, "")
                     if k2 in BIDDER_SET or k2 == "recommended":
-                        ctx, ln, key, rest = i, rem, k2, r2        # "ABC Power: Compliance..: Compliant"
+                        ctx, ln, key, rest = i, rem, k2, r2        
                     elif cur in BIDDER_SET and rem:
-                        add_bidder(i, cur, rem)                      # C: list style under a label
+                        add_bidder(i, cur, rem)                      
                         continue
                     elif not rem:
-                        ctx, cur = i, None                           # pure heading
+                        ctx, cur = i, None                          
                         continue
                     else:
                         ctx = i
