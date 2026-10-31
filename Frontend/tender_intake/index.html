@@ -7,13 +7,13 @@
 
 <body class="{{ kind }}">
     <main>
-        <nav class="tabs">{% for k, t in types.items() %}<a class="{{ 'on' if k == kind }}" href="{{ url_for('page', kind=k) }}">{{ t.tab }} Reports</a>{% endfor %}</nav>
+        <nav class="tabs">{% for k, t in types.items() %}<a class="{{ 'on' if k == kind }}" href="{{ url_for('page', kind=k) }}">{{ t.get('label', t.tab ~ ' Reports') }}</a>{% endfor %}</nav>
             <h1>{{ spec.title }}</h1>
             {% with m = get_flashed_messages() %}{% for x in m %}<div class="flash">{{ x }}</div>{% endfor %}{% endwith %}
         <div class="card">
             <form method="post" action="{{ url_for('process', kind=kind) }}" enctype="multipart/form-data">
                 <p>{{ spec.help }}</p>
-                <input type="file" name="reports" accept=".docx" multiple required>
+                <input type="file" name="reports" accept="{{ spec.get('ext', ('.docx',)) | join(',') }}" multiple required>
                 <p><button class="btn" type="submit">Process</button></p>
             </form>
         </div>
@@ -24,7 +24,7 @@
             <table>
                 <tr><th>When</th><th>Report(s)</th><th></th></tr>
                 {% for j in jobs %}<tr><td>{{ j.time }}</td>
-                <td>{% for r in j.reports %}{{ r.file }} <small>({{ r.fields }} fields, {{ r.bidders }} bidder(s))</small><br>
+                <td>{% for r in j.reports %}{{ r.file }} <small>({{ r.summary or (r.fields ~ ' fields, ' ~ r.bidders ~ ' bidder(s)') }})</small><br>
                     {% for n in r.notes %}<small>&#9888; {{ n }}</small><br>{% endfor %}{% endfor %}</td>
                 <td><a class="btn alt" href="{{ url_for('view', kind=kind, job_id=j.id) }}">View</a></td></tr>{% endfor %}
             </table>
