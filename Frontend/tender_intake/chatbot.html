@@ -1,0 +1,79 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SLT Procurement Assistant</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='chatbot.css') }}">
+</head>
+<body>
+
+    <header class="chatbot-header">
+        <div>
+            <h1>SLT Procurement Assistant</h1>
+            <p>Ask questions about the approved SLT procurement contract templates.</p>
+        </div>
+        <a class="back-link" href="{{ url_for('home') }}">Back to Tender Processing</a>
+    </header>
+
+    <main class="chatbot-container">
+
+        <section class="chatbot-card">
+            <h2>Ask a Procurement Question</h2>
+
+            <p class="description">
+                Select a contract category or search across all five categories.
+                Answers are generated using the approved procurement documents.
+            </p>
+
+            <form id="chatbot-form" data-endpoint="{{ url_for('chatbot.chatbot_ask') }}">
+
+                <label for="category">Contract Category</label>
+                <select id="category" name="category">
+                    <option value="">All procurement categories</option>
+                    {% for category in categories %}
+                    <option value="{{ category }}">{{ category }}</option>
+                    {% endfor %}
+                </select>
+
+                <label for="question">Your Question</label>
+                <textarea
+                    id="question"
+                    name="question"
+                    rows="4"
+                    maxlength="5000"
+                    placeholder="Example: What are the requirements for Performance Security?"
+                    required
+                ></textarea>
+
+                <div class="form-footer">
+                    <span id="question-count">0 / 5000</span>
+                    <button type="submit" id="ask-button">Ask Question</button>
+                </div>
+
+            </form>
+        </section>
+
+        <section id="loading" class="loading hidden">
+            Searching procurement documents and generating your answer...
+        </section>
+
+        <section id="error-message" class="error-message hidden" role="alert"></section>
+
+        <section id="answer-section" class="answer-card hidden">
+            <h2>Answer</h2>
+            <div id="answer-text" class="answer-text"></div>
+
+            <div id="sources-container" class="sources-container hidden">
+                <h3>Reference Sources</h3>
+                <ul id="sources-list"></ul>
+            </div>
+
+            <p id="retrieved-count" class="retrieved-count"></p>
+        </section>
+
+    </main>
+
+    <script src="{{ url_for('static', filename='chatbot.js') }}" defer></script>
+</body>
+</html>
