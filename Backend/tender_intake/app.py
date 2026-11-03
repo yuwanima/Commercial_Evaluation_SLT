@@ -10,6 +10,7 @@ from flask import Flask, abort, flash, redirect, render_template, request, send_
 from werkzeug.utils import secure_filename
 
 from process import REPORT_TYPES, process_files
+from chatbot_routes import chatbot_bp
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 JOBS = os.path.join(BASE, "jobs")
@@ -24,6 +25,7 @@ app = Flask(
 app.secret_key = os.environ.get("SECRET_KEY", "change-me")
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
 OPEN_LOCAL = False
+app.register_blueprint(chatbot_bp)
 
 
 def _kind(kind):
