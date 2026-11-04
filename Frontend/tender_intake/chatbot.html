@@ -3,15 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SLT Procurement Assistant</title>
+    <title>ContractWise AI</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='chatbot.css') }}">
 </head>
 <body>
 
     <header class="chatbot-header">
         <div>
-            <h1>SLT Procurement Assistant</h1>
-            <p>Ask questions about the approved SLT procurement contract templates.</p>
+            <h1>ContractWise AI</h1>
+            <p>Your AI assistant for GCC and SCC tender contract documents.</p>
         </div>
         <a class="back-link" href="{{ url_for('home') }}">Back to Tender Processing</a>
     </header>
@@ -19,18 +19,18 @@
     <main class="chatbot-container">
 
         <section class="chatbot-card">
-            <h2>Ask a Procurement Question</h2>
+            <h2>Ask a Question</h2>
 
             <p class="description">
                 Select a contract category or search across all five categories.
-                Answers are generated using the approved procurement documents.
+                Answers are generated using the approved contract documents.
             </p>
 
             <form id="chatbot-form" data-endpoint="{{ url_for('chatbot.chatbot_ask') }}">
 
                 <label for="category">Contract Category</label>
                 <select id="category" name="category">
-                    <option value="">All procurement categories</option>
+                    <option value="">All contract categories</option>
                     {% for category in categories %}
                     <option value="{{ category }}">{{ category }}</option>
                     {% endfor %}
@@ -54,8 +54,94 @@
             </form>
         </section>
 
+        <section class="chatbot-card upload-card">
+            <h2>Vendor Submission Upload</h2>
+
+            <p class="description">
+                Upload the documents submitted by a vendor for one tender.
+                You can select multiple PDF, Word and Excel files together.
+            </p>
+
+            <form
+                id="upload-form"
+                data-endpoint="{{ url_for('chatbot.chatbot_upload') }}"
+                enctype="multipart/form-data"
+            >
+                <label for="vendor-files">Select Vendor Documents</label>
+                <input
+                    type="file"
+                    id="vendor-files"
+                    name="files"
+                    accept=".pdf,.docx,.xlsx,.xlsm"
+                    multiple
+                    required
+                >
+
+                <p class="upload-hint">
+                    Supported formats: PDF, DOCX, XLSX and XLSM.
+                    Maximum 20 files, 10 MB per file and 50 MB total.
+                </p>
+
+                <p id="selected-files" class="selected-files">
+                    No files selected.
+                </p>
+
+                <div class="form-footer">
+                    <span id="upload-file-count">0 files selected</span>
+                    <button type="submit" id="upload-button">
+                        Upload and Process Documents
+                    </button>
+                </div>
+            </form>
+        </section>
+
+        <section id="upload-loading" class="loading hidden" role="status">
+            Uploading documents and extracting their contents...
+        </section>
+
+        <section id="upload-error" class="error-message hidden" role="alert"></section>
+
+        <section id="upload-result" class="answer-card hidden">
+            <h2>Vendor Submission Processing Results</h2>
+
+            <p id="submission-id" class="result-metadata"></p>
+            <p id="submission-status" class="result-status"></p>
+
+            <div class="summary-grid">
+                <div class="summary-item">
+                    <strong id="files-processed">0</strong>
+                    <span>Files processed</span>
+                </div>
+
+                <div class="summary-item">
+                    <strong id="files-failed">0</strong>
+                    <span>Files failed</span>
+                </div>
+
+                <div class="summary-item">
+                    <strong id="sections-extracted">0</strong>
+                    <span>Sections extracted</span>
+                </div>
+
+                <div class="summary-item">
+                    <strong id="ocr-pages">0</strong>
+                    <span>Pages requiring review</span>
+                </div>
+            </div>
+
+            <div class="sources-container">
+                <h3>Uploaded Documents</h3>
+                <ul id="uploaded-files-list"></ul>
+            </div>
+
+            <div id="review-warning" class="review-warning hidden">
+                Some pages or documents require additional review.
+                Text extraction alone does not confirm contractual compliance.
+            </div>
+        </section>
+
         <section id="loading" class="loading hidden">
-            Searching procurement documents and generating your answer...
+            Searching contract documents and generating your answer...
         </section>
 
         <section id="error-message" class="error-message hidden" role="alert"></section>

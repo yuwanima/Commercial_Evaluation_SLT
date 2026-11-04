@@ -8,7 +8,7 @@
 <body class="{{ kind }}">
     <main>
         <nav class="tabs">{% for k, t in types.items() %}<a class="{{ 'on' if k == kind }}" href="{{ url_for('page', kind=k) }}">{{ t.get('label', t.tab ~ ' Reports') }}</a>{% endfor %}</nav>
-        <p><a class='btn alt' href="{{ url_for('chatbot.chatbot_page') }}">Open Procurement Chatbot</a></p>
+        <p><a class='btn alt' href="{{ url_for('chatbot.chatbot_page') }}">ContractWise AI</a></p>
             <h1>{{ spec.title }}</h1>
             {% with m = get_flashed_messages() %}{% for x in m %}<div class="flash">{{ x }}</div>{% endfor %}{% endwith %}
         <div class="card">

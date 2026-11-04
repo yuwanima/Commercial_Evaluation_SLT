@@ -1,4 +1,4 @@
-import argparse
+﻿import argparse
 import json
 import os
 import subprocess
@@ -6,7 +6,7 @@ import sys
 import time
 import uuid
 
-from flask import Flask, abort, flash, redirect, render_template, request, send_file, url_for
+from flask import Flask, abort, flash, jsonify, redirect, render_template, request, send_file, url_for
 from werkzeug.utils import secure_filename
 
 from process import REPORT_TYPES, process_files
@@ -22,10 +22,33 @@ app = Flask(
     template_folder=FRONTEND_DIR,
     static_folder=FRONTEND_DIR,
 )
-app.secret_key = os.environ.get("SECRET_KEY", "change-me")
+SECRET_KEY = os.environ.get("SECRET_KEY")
+
+if not SECRET_KEY:
+    raise RuntimeError(
+        "SECRET_KEY environment variable is required."
+    )
+
+app.secret_key = SECRET_KEY
+
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=(
+        os.environ.get("SESSION_COOKIE_SECURE", "false").lower()
+        in ("1", "true", "yes")
+    ),
+)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
 OPEN_LOCAL = False
 app.register_blueprint(chatbot_bp)
+
+
+@app.errorhandler(413)
+def handle_request_too_large(error):
+    return jsonify({
+        "error": "The total upload size cannot exceed 50 MB."
+    }), 413
 
 
 def _kind(kind):
@@ -121,3 +144,4 @@ if __name__ == "__main__":
     a = ap.parse_args()
     OPEN_LOCAL = a.open_local
     app.run(host="127.0.0.1", port=a.port)
+

@@ -72,6 +72,81 @@ def build_source_references(clauses):
 
 
 # --------------------------------------------------
+# BUILD VENDOR DOCUMENT EVIDENCE
+# --------------------------------------------------
+
+def build_vendor_evidence(vendor_evidence):
+
+    evidence_parts = []
+
+    if not isinstance(vendor_evidence, list):
+        return ""
+
+    for index, item in enumerate(vendor_evidence, start=1):
+
+        if not isinstance(item, dict):
+            continue
+
+        file_name = item.get("file_name", "")
+        location = item.get("location", "")
+        text = item.get("text", "")
+
+        if not isinstance(text, str) or not text.strip():
+            continue
+
+        if not isinstance(file_name, str):
+            file_name = "Unknown document"
+
+        if not isinstance(location, str):
+            location = "Location unavailable"
+
+        evidence = f"""
+[V{index}]
+Vendor Document: {file_name}
+Original Document Location: {location}
+
+Extracted Content:
+{text}
+"""
+
+        evidence_parts.append(evidence)
+
+    return "\n".join(evidence_parts)
+
+
+# --------------------------------------------------
+# BUILD VENDOR DOCUMENT REFERENCES
+# --------------------------------------------------
+
+def build_vendor_source_references(vendor_evidence):
+
+    references = []
+
+    if not isinstance(vendor_evidence, list):
+        return references
+
+    for index, item in enumerate(vendor_evidence, start=1):
+
+        if not isinstance(item, dict):
+            continue
+
+        text = item.get("text", "")
+
+        if not isinstance(text, str) or not text.strip():
+            continue
+
+        file_name = item.get("file_name") or "Unknown document"
+        location = item.get("location") or "Location unavailable"
+
+        references.append(
+            f"[V{index}] Vendor document: {file_name} | "
+            f"Location: {location}"
+        )
+
+    return references
+
+
+# --------------------------------------------------
 # GENERATE GROUNDED PROCUREMENT ANSWER
 # --------------------------------------------------
 
@@ -80,12 +155,19 @@ def answer_question(
     category=None,
     top_k=DEFAULT_TOP_K,
     vertex_client=None,
+    vendor_evidence=None,
 ):
 
     question = question.strip() if isinstance(question, str) else ""
 
     if not question:
         raise ValueError("Please enter a procurement question.")
+
+    if vendor_evidence is None:
+        vendor_evidence = []
+
+    if not isinstance(vendor_evidence, list):
+        vendor_evidence = []
 
     # Create one Vertex AI client for retrieval and generation.
     if vertex_client is None:
@@ -99,52 +181,114 @@ def answer_question(
         vertex_client=vertex_client,
     )
 
-    if not clauses:
+    # Build both types of evidence.
+    procurement_evidence = build_evidence(clauses)
+
+    vendor_document_evidence = build_vendor_evidence(
+        vendor_evidence
+    )
+
+    vendor_references = build_vendor_source_references(
+        vendor_evidence
+    )
+
+    # Do not generate an unsupported answer when no evidence exists.
+    if not clauses and not vendor_references:
         return {
             "question": question,
             "answer": (
-                "I could not find relevant clauses in the available "
-                "procurement contract templates. Please check the "
-                "procurement category or rephrase your question."
+                "I could not find relevant information in the available "
+                "procurement manuals or uploaded vendor documents. "
+                "Please check the procurement category, upload the "
+                "relevant document, or rephrase your question."
             ),
             "sources": [],
             "retrieved_count": 0,
+            "vendor_evidence_count": 0,
         }
 
-    evidence = build_evidence(clauses)
-
     prompt = f"""
-You are an SLT Procurement Contract Assistant.
+You are ContractWise AI, an SLT Procurement Contract Assistant.
 
-Answer the user's procurement question using ONLY the supplied
-procurement contract evidence.
+Your task is to answer procurement questions using ONLY the evidence
+provided below.
 
-STRICT RULES:
+There are two possible evidence sources:
 
-1. Do not use outside knowledge or invent procurement requirements.
-2. Do not assume that a requirement exists if it is not stated in
-   the supplied clauses.
-3. If the evidence does not sufficiently answer the question,
-   clearly say that the available retrieved clauses do not provide
-   enough information to answer.
-4. Distinguish between different procurement categories when their
-   contract terms differ.
-5. Preserve important figures, percentages, dates, time limits,
+1. SLT PROCUREMENT MANUALS
+   These contain procurement requirements and contract clauses.
+   Their citations use [1], [2], [3], etc.
+
+2. UPLOADED VENDOR DOCUMENTS
+   These contain information, declarations, responses and evidence
+   extracted from documents uploaded by the user.
+   Their citations use [V1], [V2], [V3], etc.
+
+STRICT ACCURACY RULES:
+
+1. Never use outside knowledge or invent procurement requirements.
+
+2. Distinguish clearly between an SLT procurement requirement and
+   something a vendor has stated or submitted.
+
+3. When comparing a vendor document against a procurement clause,
+   use the actual requirement from the manual and the actual
+   extracted vendor evidence.
+
+4. A vendor declaration saying "Complied" or "Yes" is a declaration.
+   It does not automatically prove substantive compliance.
+
+5. A blank field means that no value was extracted from that field.
+   Do not automatically conclude that the entire tender is incomplete
+   or that the vendor is non-compliant.
+
+6. If information is missing, explicitly identify what information
+   could not be found in the supplied evidence.
+
+7. Do not claim that a vendor is compliant or non-compliant unless
+   the supplied evidence supports that conclusion.
+
+8. Do not claim that a document has been signed, stamped or visually
+   verified. Text extraction alone cannot establish the presence
+   or validity of a visual signature or stamp.
+
+9. Preserve important figures, percentages, dates, time limits,
    conditions and exceptions exactly as stated.
-6. Explain the answer clearly and professionally.
-7. Add inline source references such as [1] or [2] to factual
-   statements. Only cite the supplied source numbers.
-8. Do not create clause numbers or page numbers.
-9. If sources provide different requirements, explain the
-   differences rather than combining them into one requirement.
+
+10. If the manual and vendor document provide different information,
+    explain the difference clearly. Do not silently resolve conflicts.
+
+11. If the available evidence is insufficient, explicitly say so.
+
+12. Do not create clause numbers, page numbers, paragraph numbers,
+    sheet names or cell references.
+
+13. Cite factual statements using only the supplied references.
+    Use [1], [2] for manual evidence and [V1], [V2] for vendor evidence.
+
+14. Do not confuse a vendor's statement with an independently
+    verified fact.
+
+15. Explain answers clearly and professionally.
 
 USER QUESTION:
 {question}
 
-RETRIEVED PROCUREMENT EVIDENCE:
-{evidence}
+RETRIEVED SLT PROCUREMENT MANUAL EVIDENCE:
+{procurement_evidence or "No relevant manual clauses were retrieved."}
 
-Provide a clear answer with supporting source references.
+UPLOADED VENDOR DOCUMENT EVIDENCE:
+{vendor_document_evidence or "No vendor document evidence was supplied."}
+
+Provide a clear, structured answer with appropriate inline citations.
+
+When relevant, organize the answer into:
+- Relevant procurement requirement
+- Information found in the vendor document
+- Comparison or assessment
+- Missing information or limitations
+
+Do not invent information to fill gaps.
 """
 
     response = vertex_client.models.generate_content(
@@ -163,11 +307,18 @@ Provide a clear answer with supporting source references.
             "Gemini returned an empty answer. Please try again."
         )
 
+    # Return manual and vendor references together.
+    all_sources = (
+        build_source_references(clauses)
+        + vendor_references
+    )
+
     return {
         "question": question,
         "answer": answer,
-        "sources": build_source_references(clauses),
+        "sources": all_sources,
         "retrieved_count": len(clauses),
+        "vendor_evidence_count": len(vendor_references),
     }
 
 
@@ -178,7 +329,7 @@ Provide a clear answer with supporting source references.
 def display_answer(result):
 
     print("\n" + "=" * 75)
-    print("SLT PROCUREMENT RAG CHATBOT")
+    print("CONTRACTWISE AI")
     print("=" * 75)
 
     print("\nQUESTION:")
@@ -195,7 +346,12 @@ def display_answer(result):
     else:
         print("No supporting references found.")
 
-    print("\nRetrieved clauses:", result["retrieved_count"])
+    print("\nRetrieved procurement clauses:", result["retrieved_count"])
+
+    print(
+        "Vendor evidence sections:",
+        result.get("vendor_evidence_count", 0)
+    )
 
     print("\n" + "=" * 75)
 
@@ -207,7 +363,7 @@ def display_answer(result):
 def main():
 
     print("=" * 75)
-    print("SLT PROCUREMENT RAG - ANSWER GENERATION TEST")
+    print("CONTRACTWISE AI - ANSWER GENERATION TEST")
     print("=" * 75)
 
     rag_config.validate_vertex_settings()
