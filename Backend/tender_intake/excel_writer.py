@@ -126,7 +126,7 @@ def _kv_sheet(wb, name, title, rows, reports):
     ws.column_dimensions["A"].width = 38
     for j in range(len(reports)):
         ws.column_dimensions[get_column_letter(2 + j)].width = 55
-    #ws.freeze_panes = "B5"
+    ws.freeze_panes = None
     return ws
 
 
@@ -158,7 +158,7 @@ def build_workbook(reports, out_path):
         c.font = _font(italic=True, color="595959", size=9)
         ws.column_dimensions[get_column_letter(2 + j)].width = 36
     ws.column_dimensions["A"].width = 38
-    #ws.freeze_panes = "B5"
+    ws.freeze_panes = None
 
     _kv_sheet(wb, "04 Compliance & Observations", "4. Compliance & Observations Table", T4, reports)
     _kv_sheet(wb, "05 Commercial Evaluation", "5. Recommendations for Commercial Evaluation", T5, reports)

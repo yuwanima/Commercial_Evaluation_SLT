@@ -10,3 +10,13 @@ __pycache__/
 Backend/storage/
 Backend/documents/
 Backend/documents/**/*.pdf
+
+# Python virtual environments
+.venv/
+venv/
+
+# RAG chatbot generated files
+Backend/rag_chatbot/chroma/
+Backend/rag_chatbot/__pycache__/
+*.sqlite3
+*.db
