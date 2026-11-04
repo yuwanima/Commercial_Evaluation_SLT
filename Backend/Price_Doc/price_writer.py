@@ -268,6 +268,7 @@ def build_workbook(reports, out_path):
         sh.page_setup.fitToWidth = 1
         sh.page_setup.fitToHeight = 0
         sh.sheet_properties.pageSetUpPr.fitToPage = True
+        sh.freeze_panes = None
     wb.calculation.fullCalcOnLoad = True
     wb.save(out_path)
     return out_path

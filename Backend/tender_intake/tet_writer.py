@@ -140,7 +140,7 @@ def _matrix_sheet(wb, name, title, rows, reports, extra=None):
     ws.column_dimensions["A"].width = 46
     for j in range(maxcols):
         ws.column_dimensions[get_column_letter(2 + j)].width = 34
-    ws.freeze_panes = "B1"
+    ws.freeze_panes = None
     return layouts
 
 
@@ -345,7 +345,7 @@ def _table5(wb, reports, l4, l6):
     ws.column_dimensions["A"].width = 46
     for j in range(maxcols):
         ws.column_dimensions[get_column_letter(2 + j)].width = 34
-    ws.freeze_panes = "B1"
+    ws.freeze_panes = None
     return ws
 
 
@@ -367,6 +367,7 @@ def build_workbook(reports, out_path):
         w.page_setup.fitToWidth = 1
         w.page_setup.fitToHeight = 0
         w.sheet_properties.pageSetUpPr.fitToPage = True
+        w.freeze_panes = None
     wb.calculation.fullCalcOnLoad = True      # Excel recalculates every formula when the file is opened
     wb.save(out_path)
     return out_path
