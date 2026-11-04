@@ -39,13 +39,13 @@ STOP = re.compile(r"^\s*(?:6\.\s*)?self[\s-]*declaration|^\s*(?:7\.\s*)?submitte
 BIDDER_HEAD = re.compile(r"^\s*(?:bidder|tenderer|supplier)\s*(?:no\.?\s*)?(\d{1,2})\b\s*[:\-–—\).]?\s*(.*)$", re.I)
 
 
-NICE = {"c_general": "Compliance with General Conditions", "c_technical": "Compliance with Technical Conditions",
+'''NICE = {"c_general": "Compliance with General Conditions", "c_technical": "Compliance with Technical Conditions",
         "c_special": "Compliance with Special Conditions", "c_contract": "Compliance with Contract Conditions",
         "major": "Major Non-compliances", "minor": "Minor/Acceptable Non-compliances", "impact": "Impact of Non-compliances",
         "status": "Qualified / Disqualified", "negotiate": "Commercial terms to be negotiated",
         "rec_fin": "Recommended for Financial Bid Opening", "bom": "Evaluated BOM included?",
         "missing": "Missing price items", "prev_prices": "Previous purchase price",
-        "ref_price": "Reference price of similar items", "suitable": "More Suitable"}
+        "ref_price": "Reference price of similar items", "suitable": "More Suitable"}'''
 
 
 def _norm(s):
@@ -319,8 +319,8 @@ def extract_tet(path):
         targets = [b for b in bidders if not b[key]]
         for b in targets:
             b[key] = txt
-        if len(bidders) > 1 and targets:
-            notes.append(f"{NICE.get(key, key)}: no per-bidder breakdown found - same text copied to every bidder; please split it.")
+        #if len(bidders) > 1 and targets:
+            #notes.append(f"{NICE.get(key, key)}: no per-bidder breakdown found - same text copied to every bidder; please split it.")'''
     for b in bidders:
         for k in COMPLIANCE + ["status", "rec_fin", "bom"]:
             if b[k]:
