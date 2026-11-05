@@ -1,36 +1,104 @@
 ﻿<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<title>Commercial Evaluation</title>
+<html lang="en">
+<head>
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="stylesheet" href="{{ url_for('static', filename='index.css') }}">
+<title>Bid Compliance Consolidator</title>
+<style>
+  :root{--navy:#1f3864;--blue:#2e75b6;--bg:#f4f6fa;--card:#fff;--ink:#1c2530;--mut:#667085;--line:#d9dee7;--ok:#1e7b3a;--bad:#b42318;--okbg:#e6f4ea;--badbg:#fdecea}
+  @media (prefers-color-scheme:dark){:root{--bg:#10151d;--card:#18202b;--ink:#e7ecf3;--mut:#93a1b5;--line:#2b3646;--okbg:#17301f;--badbg:#3a1a17;--navy:#8fb4ee;--blue:#5aa0e0}}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  header{background:#1f3864;color:#fff;padding:22px 16px}
+  .wrap{max-width:960px;margin:0 auto;padding:0 16px} header .wrap{padding:0}
+  h1{margin:0;font-size:22px} header p{margin:4px 0 0;opacity:.85;font-size:14px}
+  main{padding:22px 0 60px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:700px){.grid{grid-template-columns:1fr}}
+  section{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+  section h2{margin:0;font-size:18px;color:var(--navy)} .zone{padding:38px 12px} section .sub{margin:2px 0 12px;color:var(--mut);font-size:13.5px}
+  .zone{position:relative;border:2px dashed var(--line);border-radius:10px;padding:26px 12px;text-align:center;cursor:pointer;transition:.15s}
+  .zone:hover,.zone.over{border-color:var(--blue);background:color-mix(in srgb,var(--blue) 8%,transparent)}
+  .zone b{display:block} .zone span{font-size:13px;color:var(--mut)}
+  .zone input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%}
+  ul.files{list-style:none;margin:12px 0 0;padding:0;display:grid;gap:8px}
+  ul.files li{display:grid;grid-template-columns:1fr auto;gap:2px 8px;align-items:center;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+  .fn{font-size:12.5px;color:var(--mut);word-break:break-all;grid-column:1}
+  li input{grid-column:1;min-width:0;padding:6px 9px;border:1px solid var(--line);border-radius:6px;font:inherit;font-size:14px;background:var(--card);color:var(--ink)}
+  li button{grid-column:2;grid-row:1/3;border:0;background:none;color:var(--mut);font-size:20px;cursor:pointer;border-radius:6px;padding:2px 8px}
+  li button:hover{color:var(--bad);background:var(--badbg)}
+  .tag{display:inline-block;font-size:11px;font-weight:700;border-radius:4px;padding:0 6px;margin-right:4px;color:#fff;background:var(--blue)}
+  .tag.SCC{background:#7030a0} .tag.ZIP{background:#667085}
+  .count{font-size:13px;color:var(--ok);font-weight:600;margin-top:10px}
+  .actions{margin-top:18px}
+  button.btn{border:0;border-radius:9px;padding:12px 24px;font:inherit;font-weight:600;cursor:pointer;background:var(--navy);color:#fff}
+  @media(prefers-color-scheme:dark){button.btn{color:#10151d}}
+  button.btn:hover{filter:brightness(1.15)} button.btn:disabled{opacity:.5;cursor:not-allowed}
+  .msg{margin-top:16px;border-radius:10px;padding:12px 16px;font-size:14px;background:var(--badbg);color:var(--bad);border:1px solid var(--bad)}
+  .res{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-top:20px}
+  .res h3{margin:0 0 4px;font-size:17px;color:var(--ok)}
+  .dl{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:14px 0 8px}
+  @media(max-width:700px){.dl{grid-template-columns:1fr}}
+  .dl a{display:block;text-decoration:none;border:1px solid var(--line);border-radius:10px;padding:14px;color:var(--ink);background:var(--bg)}
+  .dl a:hover{border-color:var(--blue)} .dl b{display:block;color:var(--navy)} .dl span{font-size:13px;color:var(--mut)}
+  .dl a.off{opacity:.45;pointer-events:none}
+  .warn{margin:10px 0 0;padding-left:18px;color:var(--bad);font-size:13.5px}
+  .spin{display:inline-block;width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:r .7s linear infinite;vertical-align:-2px;margin-right:8px}
+  @keyframes r{to{transform:rotate(360deg)}}
+</style>
 </head>
-
-<body class="{{ kind }}">
-    <main>
-        <nav class="tabs">{% for k, t in types.items() %}<a class="{{ 'on' if k == kind }}" href="{{ url_for('page', kind=k) }}">{{ t.get('label', t.tab ~ ' Reports') }}</a>{% endfor %}</nav>
-        <p><a class='btn alt' href="{{ url_for('chatbot.chatbot_page') }}">Open Procurement Chatbot</a></p>
-            <h1>{{ spec.title }}</h1>
-            {% with m = get_flashed_messages() %}{% for x in m %}<div class="flash">{{ x }}</div>{% endfor %}{% endwith %}
-        <div class="card">
-            <form method="post" action="{{ url_for('process', kind=kind) }}" enctype="multipart/form-data">
-                <p>{{ spec.help }}</p>
-                <input type="file" name="reports" accept="{{ spec.get('ext', ('.docx',)) | join(',') }}" multiple required>
-                <p><button class="btn" type="submit">Process</button></p>
-            </form>
-        </div>
-
-        <div class="card">
-            <b>Processed {{ spec.tab }} reports</b>
-            {% if not jobs %}<p><small>Nothing processed yet.</small></p>{% else %}
-            <table>
-                <tr><th>When</th><th>Report(s)</th><th></th></tr>
-                {% for j in jobs %}<tr><td>{{ j.time }}</td>
-                <td>{% for r in j.reports %}{{ r.file }} <small>({{ r.summary or (r.fields ~ ' fields, ' ~ r.bidders ~ ' bidder(s)') }})</small><br>
-                    {% for n in r.notes %}<small>&#9888; {{ n }}</small><br>{% endfor %}{% endfor %}</td>
-                <td><a class="btn alt" href="{{ url_for('view', kind=kind, job_id=j.id) }}">View</a></td></tr>{% endfor %}
-            </table>
-            {% endif %}
-        </div>
-    </main>
+<body>
+<header><div class="wrap"><h1>Bid Compliance Consolidator</h1><p>Drop all bidders' GCC and SCC files in — get one comparison Excel for each.</p></div></header>
+<main><div class="wrap">
+  <section id="all"><h2>Upload files</h2><p class="sub">Drop all bidders' GCC files (.xlsx) and SCC files (.docx) here together — they are sorted automatically.</p>
+    <div class="zone"><b>Choose or drop all files here</b><span>GCC (.xlsx) and SCC (.docx), as many as you need</span><input type="file" multiple accept=".xlsx,.xlsm,.docx,.zip"></div>
+    <ul class="files"></ul><div class="count"></div></section>
+  <div class="actions"><button class="btn" id="go" type="button">Generate comparison</button></div>
+  <div id="out"></div>
+</div></main>
+<script>
+const out=document.getElementById('out'),go=document.getElementById('go');
+const esc=s=>s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function guess(n){return n.replace(/\.[^.]+$/,'').replace(/\b(GCC|SCC|compliance|for|general conditions of contract|special conditions of contract|copy of)\b/ig,' ').replace(/[_\-]+/g,' ').replace(/\s+/g,' ').trim()||n.replace(/\.[^.]+$/,'')}
+const items=[];
+const kindOf=n=>/\.(xlsx|xlsm)$/i.test(n)?'GCC':/\.docx$/i.test(n)?'SCC':/\.zip$/i.test(n)?'ZIP':null;
+function render(){
+  const sec=document.getElementById('all'),ul=sec.querySelector('ul');ul.innerHTML='';
+  items.forEach((it,i)=>{
+    const li=document.createElement('li');
+    li.innerHTML=`<span class="fn"><span class="tag ${it.kind}">${it.kind}</span> ${esc(it.file.name)}</span>`+(it.kind==='ZIP'?'':`<input type="text" value="${esc(it.name)}" title="Bidder name" placeholder="Bidder name">`)+`<button type="button" title="Remove">×</button>`;
+    const inp=li.querySelector('input');if(inp)inp.oninput=e=>it.name=e.target.value;
+    li.querySelector('button').onclick=()=>{items.splice(i,1);render()};
+    ul.append(li);
+  });
+  const c=k=>items.filter(x=>x.kind===k).length;
+  sec.querySelector('.count').textContent=items.length?`${c('GCC')} GCC · ${c('SCC')} SCC`+(c('ZIP')?` · ${c('ZIP')} zip`:'')+' ready':'';
+}
+function add(files){
+  const bad=[];
+  [...files].forEach(f=>{const k=kindOf(f.name);k?items.push({file:f,kind:k,name:guess(f.name)}):bad.push(f.name)});
+  render();
+  out.innerHTML=bad.length?`<div class="msg">Skipped (unsupported type): ${bad.map(esc).join(', ')}</div>`:'';
+}
+{const z=document.querySelector('#all .zone'),inp=z.querySelector('input');
+ inp.onchange=()=>{add(inp.files);inp.value=''};
+ ['dragenter','dragover'].forEach(e=>z.addEventListener(e,()=>z.classList.add('over')));
+ ['dragleave','drop'].forEach(e=>z.addEventListener(e,()=>z.classList.remove('over')));}
+go.onclick=async()=>{
+  if(!items.length){out.innerHTML='<div class="msg">Add your GCC and SCC files first.</div>';return}
+  const fd=new FormData();
+  items.forEach(it=>{fd.append('files',it.file);fd.append('names',it.kind==='ZIP'?'':it.name.trim())});
+  go.disabled=true;go.innerHTML='<span class="spin"></span>Processing…';out.innerHTML='';
+  try{
+    const r=await fetch('/api/process',{method:'POST',body:fd}),j=await r.json();
+    if(!r.ok){out.innerHTML=`<div class="msg">${esc(j.error||'Something went wrong')}${j.problems?'<ul class="warn">'+j.problems.map(p=>'<li>'+esc(p)+'</li>').join('')+'</ul>':''}</div>`;return}
+    const dl=(k,t,b)=>`<a class="${j[k]?'':'off'}" href="/api/download/${j.job}/${k}"><b>⬇ ${t}</b><span>${j[k]?b.length+' bidder(s): '+esc(b.join(', ')):'No files uploaded'}</span></a>`;
+    out.innerHTML=`<div class="res"><h3>✓ Comparison ready</h3><div style="color:var(--mut);font-size:14px">Download your Excel files:</div>
+      <div class="dl">${dl('gcc','GCC_Compliance_Comparison.xlsx',j.gcc_bidders)}${dl('scc','SCC_Compliance_Comparison.xlsx',j.scc_bidders)}</div>
+      ${j.problems.length?'<b style="color:var(--bad);font-size:14px">Some files could not be read:</b><ul class="warn">'+j.problems.map(p=>'<li>'+esc(p)+'</li>').join('')+'</ul>':''}</div>`;
+  }catch(e){out.innerHTML='<div class="msg">Could not reach the server: '+esc(String(e))+'</div>'}
+  finally{go.disabled=false;go.textContent='Generate comparison'}
+};
+</script>
 </body>
 </html>
