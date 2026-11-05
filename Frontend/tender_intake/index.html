@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -16,19 +16,22 @@
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
   @media(max-width:700px){.grid{grid-template-columns:1fr}}
   section{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
-  section h2{margin:0;font-size:18px;color:var(--navy)} .zone{padding:38px 12px} section .sub{margin:2px 0 12px;color:var(--mut);font-size:13.5px}
-  .zone{position:relative;border:2px dashed var(--line);border-radius:10px;padding:26px 12px;text-align:center;cursor:pointer;transition:.15s}
+  section h2{margin:0;font-size:18px;color:var(--navy)} section .sub{margin:2px 0 12px;color:var(--mut);font-size:13.5px}
+  .zone{position:relative;border:2px dashed var(--line);border-radius:10px;padding:28px 12px;text-align:center;transition:.15s}
   .zone:hover,.zone.over{border-color:var(--blue);background:color-mix(in srgb,var(--blue) 8%,transparent)}
-  .zone b{display:block} .zone span{font-size:13px;color:var(--mut)}
-  .zone input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%}
+  .zone b{display:block;font-size:15px} .zone span{font-size:13px;color:var(--mut)}
+  .zone-btns{margin-top:14px;display:flex;gap:10px;justify-content:center}
+  .btn-sub{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:7px 16px;font:inherit;font-size:13.5px;font-weight:600;cursor:pointer;color:var(--navy);box-shadow:0 1px 2px rgba(0,0,0,0.04);transition:.15s}
+  .btn-sub:hover{border-color:var(--blue);background:var(--bg)}
   ul.files{list-style:none;margin:12px 0 0;padding:0;display:grid;gap:8px}
-  ul.files li{display:grid;grid-template-columns:1fr auto;gap:2px 8px;align-items:center;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
-  .fn{font-size:12.5px;color:var(--mut);word-break:break-all;grid-column:1}
+  ul.files li{display:grid;grid-template-columns:1fr auto;gap:4px 8px;align-items:center;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+  .fn{font-size:12.5px;color:var(--mut);word-break:break-all;grid-column:1;display:flex;align-items:center;gap:6px}
   li input{grid-column:1;min-width:0;padding:6px 9px;border:1px solid var(--line);border-radius:6px;font:inherit;font-size:14px;background:var(--card);color:var(--ink)}
-  li button{grid-column:2;grid-row:1/3;border:0;background:none;color:var(--mut);font-size:20px;cursor:pointer;border-radius:6px;padding:2px 8px}
-  li button:hover{color:var(--bad);background:var(--badbg)}
-  .tag{display:inline-block;font-size:11px;font-weight:700;border-radius:4px;padding:0 6px;margin-right:4px;color:#fff;background:var(--blue)}
-  .tag.SCC{background:#7030a0} .tag.ZIP{background:#667085}
+  li button.rm{grid-column:2;grid-row:1/3;border:0;background:none;color:var(--mut);font-size:20px;cursor:pointer;border-radius:6px;padding:2px 8px}
+  li button.rm:hover{color:var(--bad);background:var(--badbg)}
+  .tag{display:inline-block;font-size:11px;font-weight:700;border-radius:4px;padding:1px 6px;color:#fff;background:var(--blue);cursor:pointer;user-select:none;transition:opacity .15s}
+  .tag:hover{opacity:.85}
+  .tag.SCC{background:#7030a0} .tag.ZIP{background:#667085;cursor:default}
   .count{font-size:13px;color:var(--ok);font-weight:600;margin-top:10px}
   .actions{margin-top:18px}
   button.btn{border:0;border-radius:9px;padding:12px 24px;font:inherit;font-weight:600;cursor:pointer;background:var(--navy);color:#fff}
@@ -48,56 +51,224 @@
 </style>
 </head>
 <body>
-<header><div class="wrap"><h1>Bid Compliance Consolidator</h1><p>Drop all bidders' GCC and SCC files in — get one comparison Excel for each.</p></div></header>
+<header><div class="wrap"><h1>Bid Compliance Consolidator</h1><p>Upload all bidders' GCC and SCC files or folders — get one comparison Excel for each.</p></div></header>
 <main><div class="wrap">
-  <section id="all"><h2>Upload files</h2><p class="sub">Drop all bidders' GCC files (.xlsx) and SCC files (.docx) here together — they are sorted automatically.</p>
-    <div class="zone"><b>Choose or drop all files here</b><span>GCC (.xlsx) and SCC (.docx), as many as you need</span><input type="file" multiple accept=".xlsx,.xlsm,.docx,.zip"></div>
-    <ul class="files"></ul><div class="count"></div></section>
+  <section id="all">
+    <h2>Upload files & folders</h2>
+    <p class="sub">Drop files, folders, or archives (.xlsx, .docx, .doc, .pdf, .zip) — click any tag badge to toggle GCC / SCC.</p>
+    <div class="zone" id="drop-zone">
+      <b>Choose or drop files & folders here</b>
+      <span>GCC (.xlsx) and SCC (.docx / .doc / .pdf), as many as you need</span>
+      <div class="zone-btns">
+        <button type="button" class="btn-sub" id="btn-files">📁 Select Files</button>
+        <button type="button" class="btn-sub" id="btn-folder">📂 Select Folder</button>
+      </div>
+      <input type="file" id="file-input" multiple accept=".xlsx,.xlsm,.docx,.doc,.pdf,.zip" style="display:none">
+      <input type="file" id="folder-input" webkitdirectory directory multiple style="display:none">
+    </div>
+    <ul class="files"></ul>
+    <div class="count"></div>
+  </section>
   <div class="actions"><button class="btn" id="go" type="button">Generate comparison</button></div>
   <div id="out"></div>
 </div></main>
 <script>
-const out=document.getElementById('out'),go=document.getElementById('go');
-const esc=s=>s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-function guess(n){return n.replace(/\.[^.]+$/,'').replace(/\b(GCC|SCC|compliance|for|general conditions of contract|special conditions of contract|copy of)\b/ig,' ').replace(/[_\-]+/g,' ').replace(/\s+/g,' ').trim()||n.replace(/\.[^.]+$/,'')}
-const items=[];
-const kindOf=n=>/\.(xlsx|xlsm)$/i.test(n)?'GCC':/\.docx$/i.test(n)?'SCC':/\.zip$/i.test(n)?'ZIP':null;
-function render(){
-  const sec=document.getElementById('all'),ul=sec.querySelector('ul');ul.innerHTML='';
-  items.forEach((it,i)=>{
-    const li=document.createElement('li');
-    li.innerHTML=`<span class="fn"><span class="tag ${it.kind}">${it.kind}</span> ${esc(it.file.name)}</span>`+(it.kind==='ZIP'?'':`<input type="text" value="${esc(it.name)}" title="Bidder name" placeholder="Bidder name">`)+`<button type="button" title="Remove">×</button>`;
-    const inp=li.querySelector('input');if(inp)inp.oninput=e=>it.name=e.target.value;
-    li.querySelector('button').onclick=()=>{items.splice(i,1);render()};
+const out = document.getElementById('out'), go = document.getElementById('go');
+const fileInput = document.getElementById('file-input'), folderInput = document.getElementById('folder-input');
+const btnFiles = document.getElementById('btn-files'), btnFolder = document.getElementById('btn-folder');
+const dropZone = document.getElementById('drop-zone');
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function guess(name, folderPath) {
+  if (folderPath) {
+    const cleanPath = folderPath.replace(/^[/\\]+|[/\\]+$/g, '');
+    const seg = cleanPath.split(/[/\\]/)[0];
+    if (seg && !/^(gcc|scc|compliance|files?|bidders?|docs?|tender)$/i.test(seg)) {
+      return seg.replace(/[_\-]+/g, ' ').trim();
+    }
+  }
+  return name.replace(/\.[^.]+$/, '')
+             .replace(/\b(GCC|SCC|compliance|for|general conditions of contract|special conditions of contract|copy of)\b/ig, ' ')
+             .replace(/[_\-]+/g, ' ')
+             .replace(/\s+/g, ' ')
+             .trim() || name.replace(/\.[^.]+$/, '');
+}
+
+const items = [];
+const kindOf = n => {
+  if (/\.(xlsx|xlsm)$/i.test(n)) return 'GCC';
+  if (/\.(docx|doc)$/i.test(n)) return 'SCC';
+  if (/\.zip$/i.test(n)) return 'ZIP';
+  if (/\.pdf$/i.test(n)) {
+    return /gcc/i.test(n) ? 'GCC' : 'SCC';
+  }
+  return null;
+};
+
+function render() {
+  const sec = document.getElementById('all'), ul = sec.querySelector('ul');
+  ul.innerHTML = '';
+  items.forEach((it, i) => {
+    const li = document.createElement('li');
+    li.innerHTML = `
+      <span class="fn">
+        <span class="tag ${it.kind}" title="${it.kind === 'ZIP' ? 'Archive' : 'Click to toggle GCC / SCC'}">${it.kind}</span>
+        ${esc(it.file.name)}
+        ${it.folderPath ? '<span style="opacity:0.6;font-size:11px">(' + esc(it.folderPath) + ')</span>' : ''}
+      </span>
+      ${it.kind === 'ZIP' ? '' : `<input type="text" value="${esc(it.name)}" title="Bidder name" placeholder="Bidder name">`}
+      <button type="button" class="rm" title="Remove">×</button>
+    `;
+    const tag = li.querySelector('.tag');
+    if (tag && it.kind !== 'ZIP') {
+      tag.onclick = () => {
+        it.kind = it.kind === 'GCC' ? 'SCC' : 'GCC';
+        render();
+      };
+    }
+    const inp = li.querySelector('input');
+    if (inp) inp.oninput = e => it.name = e.target.value;
+    li.querySelector('button.rm').onclick = () => {
+      items.splice(i, 1);
+      render();
+    };
     ul.append(li);
   });
-  const c=k=>items.filter(x=>x.kind===k).length;
-  sec.querySelector('.count').textContent=items.length?`${c('GCC')} GCC · ${c('SCC')} SCC`+(c('ZIP')?` · ${c('ZIP')} zip`:'')+' ready':'';
+  const c = k => items.filter(x => x.kind === k).length;
+  sec.querySelector('.count').textContent = items.length
+    ? `${c('GCC')} GCC · ${c('SCC')} SCC` + (c('ZIP') ? ` · ${c('ZIP')} zip` : '') + ' ready'
+    : '';
 }
-function add(files){
-  const bad=[];
-  [...files].forEach(f=>{const k=kindOf(f.name);k?items.push({file:f,kind:k,name:guess(f.name)}):bad.push(f.name)});
+
+function add(files) {
+  const bad = [];
+  [...files].forEach(f => {
+    const k = kindOf(f.name);
+    const fPath = f.folderPath || (f.webkitRelativePath ? f.webkitRelativePath.replace(/[^/\\]+$/, '') : '');
+    if (k) {
+      items.push({ file: f, kind: k, name: guess(f.name, fPath), folderPath: fPath });
+    } else {
+      bad.push(f.name);
+    }
+  });
   render();
-  out.innerHTML=bad.length?`<div class="msg">Skipped (unsupported type): ${bad.map(esc).join(', ')}</div>`:'';
+  out.innerHTML = bad.length ? `<div class="msg">Skipped (unsupported file type): ${bad.map(esc).join(', ')}</div>` : '';
 }
-{const z=document.querySelector('#all .zone'),inp=z.querySelector('input');
- inp.onchange=()=>{add(inp.files);inp.value=''};
- ['dragenter','dragover'].forEach(e=>z.addEventListener(e,()=>z.classList.add('over')));
- ['dragleave','drop'].forEach(e=>z.addEventListener(e,()=>z.classList.remove('over')));}
-go.onclick=async()=>{
-  if(!items.length){out.innerHTML='<div class="msg">Add your GCC and SCC files first.</div>';return}
-  const fd=new FormData();
-  items.forEach(it=>{fd.append('files',it.file);fd.append('names',it.kind==='ZIP'?'':it.name.trim())});
-  go.disabled=true;go.innerHTML='<span class="spin"></span>Processing…';out.innerHTML='';
-  try{
-    const r=await fetch('/api/process',{method:'POST',body:fd}),j=await r.json();
-    if(!r.ok){out.innerHTML=`<div class="msg">${esc(j.error||'Something went wrong')}${j.problems?'<ul class="warn">'+j.problems.map(p=>'<li>'+esc(p)+'</li>').join('')+'</ul>':''}</div>`;return}
-    const dl=(k,t,b)=>`<a class="${j[k]?'':'off'}" href="/api/download/${j.job}/${k}"><b>⬇ ${t}</b><span>${j[k]?b.length+' bidder(s): '+esc(b.join(', ')):'No files uploaded'}</span></a>`;
-    out.innerHTML=`<div class="res"><h3>✓ Comparison ready</h3><div style="color:var(--mut);font-size:14px">Download your Excel files:</div>
-      <div class="dl">${dl('gcc','GCC_Compliance_Comparison.xlsx',j.gcc_bidders)}${dl('scc','SCC_Compliance_Comparison.xlsx',j.scc_bidders)}</div>
-      ${j.problems.length?'<b style="color:var(--bad);font-size:14px">Some files could not be read:</b><ul class="warn">'+j.problems.map(p=>'<li>'+esc(p)+'</li>').join('')+'</ul>':''}</div>`;
-  }catch(e){out.innerHTML='<div class="msg">Could not reach the server: '+esc(String(e))+'</div>'}
-  finally{go.disabled=false;go.textContent='Generate comparison'}
+
+btnFiles.onclick = () => fileInput.click();
+btnFolder.onclick = () => folderInput.click();
+
+fileInput.onchange = () => {
+  add(fileInput.files);
+  fileInput.value = '';
+};
+folderInput.onchange = () => {
+  add(folderInput.files);
+  folderInput.value = '';
+};
+
+async function getDroppedFiles(dt) {
+  const outFiles = [];
+  if (dt.items && dt.items.length) {
+    async function traverse(entry, path = '') {
+      if (!entry) return;
+      if (entry.isFile) {
+        const file = await new Promise(res => entry.file(res));
+        file.folderPath = path;
+        outFiles.push(file);
+      } else if (entry.isDirectory) {
+        const dirReader = entry.createReader();
+        const readEntries = () => new Promise(res => dirReader.readEntries(res, () => res([])));
+        let entries;
+        do {
+          entries = await readEntries();
+          if (entries && entries.length) {
+            for (const child of entries) {
+              await traverse(child, path + entry.name + '/');
+            }
+          }
+        } while (entries && entries.length > 0);
+      }
+    }
+    const queue = [];
+    for (let i = 0; i < dt.items.length; i++) {
+      const it = dt.items[i];
+      const entry = it.webkitGetAsEntry ? it.webkitGetAsEntry() : null;
+      if (entry) {
+        queue.push(traverse(entry));
+      } else if (it.kind === 'file') {
+        const f = it.getAsFile();
+        if (f) outFiles.push(f);
+      }
+    }
+    await Promise.all(queue);
+    return outFiles;
+  }
+  return Array.from(dt.files || []);
+}
+
+['dragenter', 'dragover'].forEach(e => {
+  dropZone.addEventListener(e, ev => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    dropZone.classList.add('over');
+  });
+});
+['dragleave'].forEach(e => {
+  dropZone.addEventListener(e, ev => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    dropZone.classList.remove('over');
+  });
+});
+dropZone.addEventListener('drop', async ev => {
+  ev.preventDefault();
+  ev.stopPropagation();
+  dropZone.classList.remove('over');
+  const files = await getDroppedFiles(ev.dataTransfer);
+  if (files.length) add(files);
+});
+
+go.onclick = async () => {
+  if (!items.length) {
+    out.innerHTML = '<div class="msg">Please add your GCC and SCC files or folders first.</div>';
+    return;
+  }
+  const fd = new FormData();
+  items.forEach(it => {
+    fd.append('files', it.file);
+    fd.append('names', it.kind === 'ZIP' ? '' : it.name.trim());
+    fd.append('kinds', it.kind);
+  });
+  go.disabled = true;
+  go.innerHTML = '<span class="spin"></span>Processing…';
+  out.innerHTML = '';
+  try {
+    const r = await fetch('/api/process', { method: 'POST', body: fd });
+    const j = await r.json();
+    if (!r.ok) {
+      out.innerHTML = `<div class="msg">${esc(j.error || 'Something went wrong')}${j.problems ? '<ul class="warn">' + j.problems.map(p => '<li>' + esc(p) + '</li>').join('') + '</ul>' : ''}</div>`;
+      return;
+    }
+    const dl = (k, t, b) => `<a class="${j[k] ? '' : 'off'}" href="/api/download/${j.job}/${k}"><b>⬇ ${t}</b><span>${j[k] ? b.length + ' bidder(s): ' + esc(b.join(', ')) : 'No files uploaded'}</span></a>`;
+    out.innerHTML = `
+      <div class="res">
+        <h3>✓ Comparison ready</h3>
+        <div style="color:var(--mut);font-size:14px">Download your Excel files:</div>
+        <div class="dl">
+          ${dl('gcc', 'GCC_Compliance_Comparison.xlsx', j.gcc_bidders)}
+          ${dl('scc', 'SCC_Compliance_Comparison.xlsx', j.scc_bidders)}
+        </div>
+        ${j.problems && j.problems.length ? '<b style="color:var(--bad);font-size:14px">Some files could not be read:</b><ul class="warn">' + j.problems.map(p => '<li>' + esc(p) + '</li>').join('') + '</ul>' : ''}
+      </div>
+    `;
+  } catch (e) {
+    out.innerHTML = '<div class="msg">Could not reach the server: ' + esc(String(e)) + '</div>';
+  } finally {
+    go.disabled = false;
+    go.textContent = 'Generate comparison';
+  }
 };
 </script>
 </body>
