@@ -1,123 +1,88 @@
-import argparse
-import json
-import os
-import subprocess
-import sys
-import time
-import uuid
 
-from flask import Flask, abort, flash, redirect, render_template, request, send_file, url_for
-from werkzeug.utils import secure_filename
+import re, shutil, sys, tempfile, uuid
+from pathlib import Path
 
-from process import REPORT_TYPES, process_files
-from chatbot_routes import chatbot_bp
+BASE = Path(__file__).resolve().parent
+BACKEND_DIR = BASE.parent
+FRONTEND_DIR = BACKEND_DIR.parent / "Frontend" / "tender_intake"
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
 
-BASE = os.path.dirname(os.path.abspath(__file__))
-JOBS = os.path.join(BASE, "jobs")
+from flask import Flask, jsonify, request, send_file, send_from_directory, abort
 
-FRONTEND_DIR = os.path.abspath(os.path.join(BASE, "..", "..", "Frontend", "tender_intake"))
+from goods_services import consolidate
+from Technical.evalreport import build_eval_workbook, eval_to_json, parse_eval
 
-app = Flask(
-    __name__,
-    template_folder=FRONTEND_DIR,
-    static_folder=FRONTEND_DIR,
-)
-app.secret_key = os.environ.get("SECRET_KEY", "change-me")
-app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
-OPEN_LOCAL = False
-app.register_blueprint(chatbot_bp)
-
-
-def _kind(kind):
-    if kind not in REPORT_TYPES:
-        abort(404)
-    return kind
-
-
-def _jobs_dir(kind):
-    d = os.path.join(JOBS, kind)
-    os.makedirs(d, exist_ok=True)
-    return d
-
-
-def _job_dir(kind, job_id):
-    d = os.path.join(_jobs_dir(kind), job_id)
-    if not job_id.isalnum() or not os.path.isdir(d):
-        abort(404)
-    return d
-
-
-def _list_jobs(kind):
-    out = []
-    base = _jobs_dir(kind)
-    for jid in sorted(os.listdir(base), reverse=True):
-        meta = os.path.join(base, jid, "meta.json")
-        if os.path.exists(meta):
-            with open(meta, encoding="utf-8") as f:
-                out.append(json.load(f))
-    return out
-
+app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024
+WORK = Path(tempfile.gettempdir()) / "bid_compliance_jobs"
+WORK.mkdir(exist_ok=True)
+FILES = {"gcc": "GCC_Compliance_Comparison.xlsx", "scc": "SCC_Compliance_Comparison.xlsx",
+         "eval": "Technical_Evaluation_Compliance.xlsx"}
 
 @app.get("/")
-def home():
-    return redirect(url_for("page", kind=next(iter(REPORT_TYPES))))
+def index():
+    return send_from_directory(FRONTEND_DIR, "index.html")
 
+@app.post("/api/process")
+def process():
+    job = uuid.uuid4().hex[:12]
+    inp = WORK / job / "in"
+    inp.mkdir(parents=True)
+    specs, bad = [], []
+    names = request.form.getlist("names")
+    for i, f in enumerate(request.files.getlist("files")):
+        ext = Path(f.filename or "").suffix.lower()
+        if ext not in (".xlsx", ".xlsm", ".xls", ".docx", ".doc", ".pdf", ".zip"):
+            bad.append(f.filename)
+            continue
+        d = inp / f"f{i}"
+        d.mkdir()
+        path = d / ("GCC" + ext if ext in (".xlsx", ".xlsm", ".xls") else "bundle.zip" if ext == ".zip" else "SCC" + ext)
+        f.save(path)
+        name = re.sub(r'[\\/:*?"<>|=]+', "-", names[i].strip() if i < len(names) else "")
+        if ext == ".zip" or not name:
+            name = "" if ext == ".zip" else consolidate.derive_bidder_name(Path(f.filename), None)
+        if ext == ".zip":
+            name = ""
+        specs.append(f"{name}={path}" if name else str(path))
+    if not specs:
+        shutil.rmtree(WORK / job, ignore_errors=True)
+        return jsonify(error="No usable files received (.xlsx/.xls/.pdf for GCC, .docx/.doc/.pdf for SCC or evaluation reports, or .zip)."), 400
+    mode = request.form.get("mode") if request.form.get("mode") in ("bids", "eval") else None
+    if mode == "eval":
+        evals, problems = [], []
+        for spec in specs:
+            label, raw_path = spec.split("=", 1) if "=" in spec and not Path(spec).exists() else ("", spec)
+            path = Path(raw_path)
+            try:
+                parsed = parse_eval(path)
+                evals.append((label or path.name, parsed))
+            except Exception as exc:
+                problems.append(f"{path.name}: {exc}")
+        if not evals:
+            return jsonify(error="None of the evaluation reports could be read.", problems=problems), 422
+        out = WORK / job / "out"
+        out.mkdir(parents=True, exist_ok=True)
+        build_eval_workbook(evals, out / FILES["eval"])
+        return jsonify(job=job, eval=True, evals=[eval_to_json(label, parsed) for label, parsed in evals],
+                       problems=problems + [f"{x}: unsupported file type, skipped" for x in bad])
 
-@app.get("/<kind>")
-def page(kind):
-    _kind(kind)
-    return render_template("index.html", kind=kind, types=REPORT_TYPES, spec=REPORT_TYPES[kind], jobs=_list_jobs(kind))
+    res = consolidate.run(specs, WORK / job / "out")
+    if not res["gcc"] and not res["scc"]:
+        return jsonify(error="None of the files could be read.", problems=res["problems"]), 422
+    return jsonify(job=job, gcc=bool(res["gcc"]), scc=bool(res["scc"]), eval=False, evals=[],
+                   gcc_bidders=res["gcc_bidders"], scc_bidders=res["scc_bidders"],
+                   problems=res["problems"] + [f"{x}: unsupported file type, skipped" for x in bad])
 
-
-@app.post("/<kind>/process")
-def process(kind):
-    _kind(kind)
-    files = [f for f in request.files.getlist("reports") if f.filename and f.filename.lower().endswith(".docx")]
-    if not files:
-        flash("Please choose at least one report (.docx).")
-        return redirect(url_for("page", kind=kind))
-    job_id = uuid.uuid4().hex[:12]
-    d = os.path.join(_jobs_dir(kind), job_id)
-    os.makedirs(os.path.join(d, "in"))
-    paths = []
-    for f in files:
-        p = os.path.join(d, "in", secure_filename(f.filename))
-        f.save(p)
-        paths.append(p)
-    try:
-        reports = process_files(kind, paths, os.path.join(d, "tables.xlsx"))
-    except Exception as e:  # corrupt / unsupported file
-        flash(f"Could not process the file(s): {e}")
-        return redirect(url_for("page", kind=kind))
-    meta = {"id": job_id, "time": time.strftime("%Y-%m-%d %H:%M"),
-            "reports": [{"file": r["source"], "fields": len(r["fields"]), "bidders": len(r["bidders"]),
-                         "notes": r["notes"]} for r in reports]}
-    with open(os.path.join(d, "meta.json"), "w", encoding="utf-8") as f:
-        json.dump(meta, f)
-    flash("Tables generated. Click View to open them in Excel.")
-    return redirect(url_for("page", kind=kind))
-
-
-@app.get("/<kind>/view/<job_id>")
-def view(kind, job_id):
-    _kind(kind)
-    path = os.path.join(_job_dir(kind, job_id), "tables.xlsx")
-    if OPEN_LOCAL and request.remote_addr in ("127.0.0.1", "::1"):
-        if sys.platform.startswith("win"):
-            os.startfile(path)  # noqa
-        elif sys.platform == "darwin":
-            subprocess.Popen(["open", path])
-        else:
-            subprocess.Popen(["xdg-open", path])
-        flash("Opened in Excel. Save in Excel to keep your edits.")
-        return redirect(url_for("page", kind=kind))
-    return send_file(path, as_attachment=True, download_name=f"{kind.upper()}_tables_{job_id}.xlsx")
-
+@app.get("/api/download/<job>/<kind>")
+def download(job, kind):
+    if kind not in FILES or not re.fullmatch(r"[0-9a-f]{12}", job):
+        abort(404)
+    p = WORK / job / "out" / FILES[kind]
+    if not p.exists():
+        abort(404)
+    return send_file(p, as_attachment=True, download_name=FILES[kind])
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--open-local", action="store_true")
-    ap.add_argument("--port", type=int, default=5000)
-    a = ap.parse_args()
-    OPEN_LOCAL = a.open_local
-    app.run(host="127.0.0.1", port=a.port)
+    app.run(host="127.0.0.1", port=5000, debug=False)
