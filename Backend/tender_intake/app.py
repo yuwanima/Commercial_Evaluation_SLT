@@ -11,14 +11,15 @@ if str(BACKEND_DIR) not in sys.path:
 from flask import Flask, jsonify, request, send_file, send_from_directory, abort
 
 from goods_services import consolidate
+from Price_Doc import pricesched
 from Technical.evalreport import build_eval_workbook, eval_to_json, parse_eval
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder=str(FRONTEND_DIR), static_url_path="")
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024
-WORK = Path(tempfile.gettempdir()) / "bid_compliance_jobs"
+WORK = Path(tempfile.gettempdir()) / "store"
 WORK.mkdir(exist_ok=True)
 FILES = {"gcc": "GCC_Compliance_Comparison.xlsx", "scc": "SCC_Compliance_Comparison.xlsx",
-         "eval": "Technical_Evaluation_Compliance.xlsx"}
+         "eval": "Technical_Evaluation_Compliance.xlsx", "price": "Price_Schedules.xlsx"}
 
 @app.get("/")
 def index():
@@ -49,7 +50,7 @@ def process():
     if not specs:
         shutil.rmtree(WORK / job, ignore_errors=True)
         return jsonify(error="No usable files received (.xlsx/.xls/.pdf for GCC, .docx/.doc/.pdf for SCC or evaluation reports, or .zip)."), 400
-    mode = request.form.get("mode") if request.form.get("mode") in ("bids", "eval") else None
+    mode = request.form.get("mode") if request.form.get("mode") in ("bids", "eval", "price") else None
     if mode == "eval":
         evals, problems = [], []
         for spec in specs:
@@ -67,6 +68,13 @@ def process():
         build_eval_workbook(evals, out / FILES["eval"])
         return jsonify(job=job, eval=True, evals=[eval_to_json(label, parsed) for label, parsed in evals],
                        problems=problems + [f"{x}: unsupported file type, skipped" for x in bad])
+
+    if mode == "price":
+        res = pricesched.run(specs, WORK / job / "out")
+        if not res["file"]:
+            return jsonify(error="None of the price schedules could be read.", problems=res["problems"]), 422
+        return jsonify(job=job, price=True, rows=res["rows"], notes=res["notes"],
+                       problems=res["problems"] + [f"{x}: unsupported file type, skipped" for x in bad])
 
     res = consolidate.run(specs, WORK / job / "out")
     if not res["gcc"] and not res["scc"]:
