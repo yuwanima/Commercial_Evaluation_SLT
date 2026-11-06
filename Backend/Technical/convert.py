@@ -87,8 +87,54 @@ def _pdf_to_xlsx(lines, tables, out):
     return out
 
 
+_REF = re.compile(r"^\d+(\.\d+)*$")
+
+
+def _fix_scc_tables(tables):
+    """SCC forms printed to PDF come out with merged/blank columns and headers that do not line up with
+    the data. Rebuild Table 1 (clause | details required | updated details | complied?) and Table 2
+    (ref | clause | amendment | remarks) with canonical headers."""
+    out, kind = [], None
+    for t in tables:
+        rows = [[_clean(c) for c in r] for r in t if any(_clean(c) for c in r)]
+        if not rows:
+            continue
+        head = " ".join(" ".join(r) for r in rows[:4]).lower()
+        k = None
+        if "details required" in head:
+            k = 1
+        elif "amendment" in head or "clause number under" in head:
+            k = 2
+        elif kind:
+            k = kind                                    # continuation of the previous table on the next page
+        else:
+            out.append(t)
+            continue
+        kind = k
+        i = 0
+        while i < len(rows) and not _REF.match(next((c for c in rows[i] if c), "")):
+            i += 1                                      # skip header rows (anything before the first clause number)
+        data = rows[i:]
+        if not data:
+            continue
+        used = [j for j in range(max(len(r) for r in data)) if any(j < len(r) and r[j] for r in data)]
+        comp = [[r[j] if j < len(r) else "" for j in used] for r in data]
+        comp = [(r + [""] * 4)[:4] for r in comp]
+        if k == 1:
+            hdr = ["Clause Number", "Details Required", "Updated Details", 'Complied or "Not Complied"']
+        else:
+            hdr = ["Ref", "Clause Number under the General Conditions of Contract", "Amendment / New addition", "Remarks"]
+        if out and out[-1] and out[-1][0] == hdr:
+            out[-1].extend(comp)
+        else:
+            out.append([hdr] + comp)
+    return out
+
+
 def _pdf_to_docx(lines, tables, out):
     import docx
+    if any(re.search(r"(?i)details required|amendment", " ".join(" ".join(r) for r in t[:4])) for t in tables):
+        tables = _fix_scc_tables(tables)
     d = docx.Document()
     # the readers identify a document by its first paragraph, but PDFs often start with a form code / header
     k = next((i for i, l in enumerate(lines) if re.search(r"(?i)evaluation report|conditions of contract", l)), 0)
@@ -99,7 +145,8 @@ def _pdf_to_docx(lines, tables, out):
     for rows in tables:
         prev = merged[-1] if merged else None
         same = prev and len(rows[0]) >= 3 and len(prev[0]) == len(rows[0])
-        known = same and re.search(r"(?i)details required|amendment|evaluation area", " ".join(prev[0]))
+        is_hdr = re.search(r"(?i)details required|amendment|evaluation area", " ".join(rows[0]))
+        known = same and not is_hdr and re.search(r"(?i)details required|amendment|evaluation area", " ".join(prev[0]))
         if same and (known or len(prev) == 1 or [_clean(c) for c in rows[0]] == [_clean(c) for c in prev[0]]):
             if [_clean(c) for c in rows[0]] == [_clean(c) for c in prev[0]]:
                 rows = rows[1:]            # repeated header row

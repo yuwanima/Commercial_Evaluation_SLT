@@ -26,9 +26,12 @@
     * read every SCC form (.docx / .doc / .pdf)       -> SCC_Compliance_Comparison.xlsx
     Each bidder gets its own column group so all bidders can be compared clause by clause.
 
+    The web front-end also has a **Price Schedule** tab. Upload completed local or
+    foreign schedules to view calculated totals and currency-aware rankings, then
+    download the detailed `Price_Schedules.xlsx` workbook.
+
     Bidder name
     -----------
     * file inside a sub-folder  -> the sub-folder name   (Bidders/ABC Ltd/GCC.xlsx -> "ABC Ltd")
     * file given directly       -> file name with GCC/SCC/etc. words removed
     * explicit                  -> "ABC Ltd=path/to/file.xlsx"
-

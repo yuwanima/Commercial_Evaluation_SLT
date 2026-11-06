@@ -1,5 +1,5 @@
 
-import argparse, difflib, os, re, shutil, subprocess, sys, tempfile, zipfile
+import argparse, re, sys, tempfile, zipfile
 from collections import OrderedDict, defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -14,13 +14,9 @@ try:
 except ImportError:
     docx = None
 
-try:
-    # pyrefly: ignore[missing-import]
-    import pdfplumber
-except ImportError:
-    pdfplumber = None
-
 HERE = Path(__file__).resolve().parent
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
 
 # ----------------------------------------------------------------- categories
 CATS = {
@@ -45,24 +41,23 @@ def clean_multiline(v):
     return re.sub(r"\n\s*\n+", "\n", re.sub(r" *\n *", "\n", s)).strip()
 
 def norm_status(raw):
-    """Return (status, raw). Status: Complied / Not Complied / Not Filled / Unclear."""
+    """Return (status, raw). Status: Complied / Partially Complied / Not Complied / Not Filled / Unclear."""
     s = clean(raw)
     if not s or set(s) <= set(".-_…– "):
         return "Not Filled"
     t = s.lower()
+    if re.search(r"partial", t):
+        return "Partially Complied"
     if re.search(r"not\s*[- ]?compl|non[- ]?compl|\bnc\b|\bno\b|deviat|reject|not\s+agree|not\s+accept", t):
         return "Not Complied"
     if re.search(r"compl|^c$|\byes\b|✓|✔|√|\bagree|\baccept|\bok\b|confirm", t):
         return "Complied"
     return "Unclear"
 
-def derive_bidder_name(path, root=None):
-    if root:
-        if root != path.parent and root in path.parents:
-            return path.relative_to(root).parts[0]
-        if root == path.parent and root.name:
-            return root.name
-    stem = path.stem
+def derive_bidder_name(path, root):
+    if root and root != path.parent and root in path.parents:
+        return path.relative_to(root).parts[0]
+    stem = path.stem.replace("_", " ")             # "\b" does not see a boundary next to "_"
     stem = re.sub(r"\(\d+\)", " ", stem)
     stem = re.sub(r"(?i)\b(copy of|compliance for|compliance|general conditions of contract|"
                   r"special conditions of contract|gcc|scc|goods|services|local|foreign|"
@@ -71,156 +66,9 @@ def derive_bidder_name(path, root=None):
     stem = re.sub(r"\s+", " ", stem).strip(" -_")
     return stem or path.stem
 
-# ----------------------------------------------------------------- file converters & PDF parsers
-def convert_doc(path):
-    """.doc -> .docx converter using Wordconv, Word COM, or LibreOffice."""
-    p = Path(path).resolve()
-    if p.suffix.lower() == ".docx":
-        return p
-    out_docx = p.with_suffix(".docx")
-    if out_docx.exists() and out_docx.stat().st_mtime >= p.stat().st_mtime:
-        return out_docx
-
-    # 1. Try Wordconv.exe (built into MS Office)
-    wordconv = r"C:\Program Files\Microsoft Office\root\Office16\Wordconv.exe"
-    if os.path.exists(wordconv):
-        try:
-            subprocess.run([wordconv, "-oice", "-nme", str(p), str(out_docx)],
-                           capture_output=True, timeout=60)
-            if out_docx.exists():
-                return out_docx
-        except Exception:
-            pass
-
-    # 2. Try PowerShell Word COM
-    try:
-        ps_script = f"""
-        $word = $null
-        try {{
-            $word = New-Object -ComObject Word.Application
-            $word.Visible = $false
-            $doc = $word.Documents.Open("{p}")
-            $doc.SaveAs2("{out_docx}", 16)
-            $doc.Close()
-            $word.Quit()
-        }} catch {{
-            if ($word) {{ $word.Quit() }}
-            exit 1
-        }}
-        """
-        subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
-                       capture_output=True, timeout=60)
-        if out_docx.exists():
-            return out_docx
-    except Exception:
-        pass
-
-    # 3. Try LibreOffice
-    soffice = shutil.which("soffice") or shutil.which("libreoffice")
-    if soffice:
-        try:
-            subprocess.run([soffice, "--headless", "--convert-to", "docx", "--outdir", str(p.parent), str(p)],
-                           capture_output=True, timeout=60)
-            if out_docx.exists():
-                return out_docx
-        except Exception:
-            pass
-
-    raise RuntimeError(f"Could not convert .doc file {p.name} to .docx. Please save as .docx or .pdf.")
-
-
-def parse_gcc_pdf(path):
-    """Extract GCC compliance table from PDF."""
-    if pdfplumber is None:
-        raise RuntimeError("pdfplumber is not installed (pip install pdfplumber)")
-    code = None
-    rows = []
-    with pdfplumber.open(path) as pdf:
-        for page in pdf.pages:
-            text = page.extract_text() or ""
-            m = re.search(r"LGLS/FCC/(\d+)", text)
-            if m and not code:
-                code = m.group(1)
-            tables = page.extract_tables() or []
-            for tbl in tables:
-                for r in tbl:
-                    if not r:
-                        continue
-                    r_clean = [clean(c) for c in r if c is not None and clean(c)]
-                    if not r_clean:
-                        continue
-                    if any("clause" in c.lower() for c in r_clean[:2]) or any("description" in c.lower() for c in r_clean[:2]):
-                        continue
-                    if len(r) >= 3:
-                        c0, c1 = clean(r[0]), clean(r[1])
-                        if not c0 or not c1:
-                            continue
-                        if re.match(r"(?i)signature of", c1):
-                            break
-                        c2 = clean(r[2])
-                        c3 = clean_multiline(r[3]) if len(r) > 3 else ""
-                        rows.append(dict(clause=c0, desc=c1, status=norm_status(c2),
-                                         raw=c2, note=c3))
-    if not rows:
-        raise ValueError("no 'Clause No' table found in PDF")
-    cat = FORM_CODE_TO_CAT.get(code)
-    return dict(cat=cat, code=code, rows=rows, sig=tuple(x["clause"] for x in rows))
-
-
-def parse_scc_pdf(path):
-    """Extract SCC compliance table from PDF."""
-    if pdfplumber is None:
-        raise RuntimeError("pdfplumber is not installed (pip install pdfplumber)")
-    t1, t2 = [], []
-    title = ""
-    with pdfplumber.open(path) as pdf:
-        for page in pdf.pages:
-            text = page.extract_text() or ""
-            if not title:
-                for line in text.split("\n"):
-                    l = clean(line)
-                    if "special conditions of contract" in l.lower():
-                        title = l
-                        break
-            tables = page.extract_tables() or []
-            for tbl in tables:
-                for r in tbl:
-                    non_empty = [clean(c) for c in r if c is not None and clean(c)]
-                    if not non_empty:
-                        continue
-                    head = " ".join(non_empty).lower()
-                    if "details required" in head or "clause number" in head or "general conditions" in head or head == "contract":
-                        continue
-                    if len(non_empty) == 1 and (non_empty[0] in ("02", "03", "index = 1") or "any other" in head):
-                        continue
-                    if re.match(r"^0\d", non_empty[0]):
-                        ref = non_empty[0]
-                        clause = ""
-                        m = re.search(r"^(\d+(\.\d+)?)\s*[-–]\s*(.*)", non_empty[1], re.DOTALL)
-                        if m:
-                            clause = m.group(1)
-                            amend = m.group(3)
-                        else:
-                            amend = non_empty[1]
-                        rem = "\n".join(non_empty[2:]) if len(non_empty) > 2 else ""
-                        t2.append(dict(ref=ref, clause=clause, amend=amend, remarks=rem))
-                    elif re.match(r"^\d+(\.\d+)?$", non_empty[0]):
-                        clause = non_empty[0]
-                        if len(non_empty) >= 3:
-                            req = non_empty[1]
-                            resp = "\n".join(non_empty[2:])
-                            t1.append(dict(clause=clause, req=req, resp=resp))
-    if not t1 and not t2:
-        raise ValueError("no SCC Table 1 / Table 2 found in PDF")
-    return dict(cat=scc_category(title) or 5, title=title, t1=t1, t2=t2)
-
-
 # ----------------------------------------------------------------- GCC reader
 def parse_gcc(path):
     """Read one bidder's GCC compliance workbook."""
-    p = Path(path)
-    if p.suffix.lower() == ".pdf":
-        return parse_gcc_pdf(p)
     wb = openpyxl.load_workbook(path, data_only=True)
     for ws in wb.worksheets:
         hdr = None
@@ -279,14 +127,9 @@ def _rows(table):
     return out
 
 def parse_scc(path):
-    p = Path(path)
-    if p.suffix.lower() == ".doc":
-        p = convert_doc(p)
-    elif p.suffix.lower() == ".pdf":
-        return parse_scc_pdf(p)
     if docx is None:
         raise RuntimeError("python-docx is not installed (pip install python-docx)")
-    d = docx.Document(p)
+    d = docx.Document(path)
     title = next((clean(p.text) for p in d.paragraphs if clean(p.text)), "")
     t1, t2 = [], []
     for t in d.tables:
@@ -296,10 +139,10 @@ def parse_scc(path):
         head = " ".join(rows[0]).lower()
         if "details required" in head:
             for r in rows[1:]:
-                r = (r + ["", "", ""])[:3]
+                r = (r + ["", "", "", ""])[:4]
                 if not r[0] and not r[1] and not r[2]:
                     continue
-                t1.append(dict(clause=r[0], req=r[1], resp=r[2]))
+                t1.append(dict(clause=r[0], req=r[1], resp=r[2], stat=r[3]))
         elif "amendment" in head:
             for r in rows[1:]:
                 r = (r + ["", "", "", ""])[:4]
@@ -330,14 +173,19 @@ def template_scc_text():
                 pass
     return out
 
-def scc_status(resp, template_resp):
+def scc_status(resp, template_resp, stat=""):
+    st = clean(stat)
+    if st:                                   # the bidder ticked Complied / Not Complied in the form's own column
+        s0 = norm_status(st)
+        if s0 in ("Complied", "Not Complied", "Partially Complied"):
+            return s0
     r = clean_multiline(resp)
     if not r or set(r) <= set(".-_…–\n :"):
         return "Not Filled"
     if template_resp is not None and re.sub(r"\W+", "", r.lower()) == re.sub(r"\W+", "", template_resp.lower()):
         return "Not Filled"
     s = norm_status(r.split("\n")[0][:40]) if re.match(r"(?i)\s*(not\s+|non[- ]?)?compl|\s*(yes|no)\b", r) else None
-    if s in ("Complied", "Not Complied"):
+    if s in ("Complied", "Not Complied", "Partially Complied"):
         return s
     return "Provided"
 
@@ -371,8 +219,12 @@ def body(ws, r, c, v, bold=False, center=False):
 def add_status_cf(ws, rng, first):
     ws.conditional_formatting.add(rng, FormulaRule(formula=[f'{first}="Complied"'], fill=PatternFill("solid", bgColor=GREEN, fgColor=GREEN)))
     ws.conditional_formatting.add(rng, FormulaRule(formula=[f'{first}="Not Complied"'], fill=PatternFill("solid", bgColor=RED, fgColor=RED)))
-    ws.conditional_formatting.add(rng, FormulaRule(formula=[f'OR({first}="Not Filled",{first}="Unclear")'], fill=PatternFill("solid", bgColor=AMBER, fgColor=AMBER)))
+    ws.conditional_formatting.add(rng, FormulaRule(formula=[f'OR({first}="Not Filled",{first}="Unclear",{first}="Partially Complied")'], fill=PatternFill("solid", bgColor=AMBER, fgColor=AMBER)))
     ws.conditional_formatting.add(rng, FormulaRule(formula=[f'{first}="Provided"'], fill=PatternFill("solid", bgColor=BLUEISH, fgColor=BLUEISH)))
+
+def cf_eligible(ws, rng, first):
+    ws.conditional_formatting.add(rng, FormulaRule(formula=[f'LEFT({first},3)="Yes"'], fill=PatternFill("solid", bgColor=GREEN, fgColor=GREEN)))
+    ws.conditional_formatting.add(rng, FormulaRule(formula=[f'LEFT({first},2)="No"'], fill=PatternFill("solid", bgColor=RED, fgColor=RED)))
 
 def finish(ws, freeze, landscape=True):
     ws.freeze_panes = freeze
@@ -391,7 +243,9 @@ def safe_sheet(name, used):
     used.add(name)
     return name
 
+
 # ----------------------------------------------------------------- clause alignment
+import difflib
 def _nd(t):
     return re.sub(r"[^a-z0-9]+", "", t.lower())
 
@@ -430,6 +284,7 @@ def build_gcc(groups, out):
     for gkey, bidders in groups.items():
         cat, code = gkey[0], gkey[1]
         label = CATS.get(cat, "Unrecognised template")
+        # ordered union of clauses
         clauses = align_clauses(bidders)
         ws = wb.create_sheet(safe_sheet(f"GCC - {label}", used))
         n = len(bidders)
@@ -473,7 +328,7 @@ def build_gcc(groups, out):
             add_status_cf(ws, f"{col}{first}:{col}{lastr}", f"{col}{first}")
         # totals
         r += 1
-        for lbl, crit in (("Complied", "Complied"), ("Not Complied", "Not Complied"), ("Not Filled", "Not Filled"), ("Unclear", "Unclear")):
+        for lbl, crit in (("Complied", "Complied"), ("Partially Complied", "Partially Complied"), ("Not Complied", "Not Complied"), ("Not Filled", "Not Filled"), ("Unclear", "Unclear")):
             body(ws, r, 2, f"Total — {lbl}", bold=True)
             body(ws, r, 1, None)
             for i in range(n):
@@ -485,7 +340,7 @@ def build_gcc(groups, out):
         body(ws, r, 1, None)
         for i in range(n):
             col = L(3 + 2 * i)
-            x = body(ws, r, 3 + 2 * i, f"={col}{r-4}/COUNTA($A${first}:$A${lastr})", bold=True, center=True)
+            x = body(ws, r, 3 + 2 * i, f"={col}{r-5}/COUNTA($A${first}:$A${lastr})", bold=True, center=True)
             x.number_format = "0.0%"
             body(ws, r, 4 + 2 * i, None)
         ws.column_dimensions["A"].width = 10
@@ -544,18 +399,21 @@ def build_scc(groups, out, tmpl):
             body(ws, r, 2, req)
             for i in range(n):
                 row = lk[i].get(k)
-                st = scc_status(row["resp"], tmap.get(k)) if row else "Not Filled"
+                st = scc_status(row["resp"], tmap.get(k), row.get("stat", "")) if row else "Not Filled"
                 if k == "other" and st == "Not Filled":
                     st = "-"          # optional free-form row: blank is fine
                 body(ws, r, 3 + 2 * i, st, center=True)
-                body(ws, r, 4 + 2 * i, row["resp"] if row else "")
+                note = row["resp"] if row else ""
+                if row and len(clean(row.get("stat", ""))) > 14:          # bidder's own remark written in the status column
+                    note = (note + "\n" if note else "") + "[" + clean_multiline(row["stat"]) + "]"
+                body(ws, r, 4 + 2 * i, note)
             r += 1
         lastr = r - 1
         for i in range(n):
             col = L(3 + 2 * i)
             add_status_cf(ws, f"{col}{first}:{col}{lastr}", f"{col}{first}")
         r += 1
-        for lbl in ("Complied", "Not Complied", "Provided", "Not Filled"):
+        for lbl in ("Complied", "Partially Complied", "Not Complied", "Provided", "Not Filled"):
             body(ws, r, 2, f"Total — {lbl}", bold=True)
             body(ws, r, 1, None)
             for i in range(n):
@@ -563,6 +421,45 @@ def build_scc(groups, out, tmpl):
                 body(ws, r, 3 + 2 * i, f'=COUNTIF({col}{first}:{col}{lastr},"{lbl}")', bold=True, center=True)
                 body(ws, r, 4 + 2 * i, None)
             r += 1
+        # ---------- Table 2: amendments / new additions proposed by each bidder
+        r += 2
+        ws.cell(r, 1, "TABLE 2 — AMENDMENTS / NEW ADDITIONS TO THE GENERAL CONDITIONS").font = Font(bold=True, size=12, color=NAVY)
+        r += 1
+        for c, t in ((1, "Ref"), (2, "Clause Number under the General Conditions of Contract")):
+            hcell(ws, r, c, t)
+        for i, b in enumerate(bidders):
+            c0 = 3 + 2 * i
+            fill = BIDFILLS[i % len(BIDFILLS)]
+            hcell(ws, r, c0, b["name"] + " — Status", fill)
+            hcell(ws, r, c0 + 1, "Amendment / New addition", fill)
+        r += 1
+        t2keys = OrderedDict()
+        for b in bidders:
+            for row in b["data"]["t2"]:
+                if clean(row["clause"]):
+                    t2keys.setdefault(_nd(row["clause"]), (row["ref"], clean_multiline(row["clause"])))
+        t2l = [{_nd(x["clause"]): x for x in b["data"]["t2"] if clean(x["clause"])} for b in bidders]
+        t2first = r
+        for k, (ref, clause) in t2keys.items():
+            body(ws, r, 1, ref, center=True)
+            body(ws, r, 2, clause)
+            for i in range(n):
+                x = t2l[i].get(k)
+                if x:
+                    s0 = norm_status(x["remarks"]) if clean(x["remarks"]) else "Provided"
+                    body(ws, r, 3 + 2 * i, s0 if s0 != "Unclear" else "Provided", center=True)
+                    body(ws, r, 4 + 2 * i, clean_multiline(x["amend"]) + (("\n[" + clean_multiline(x["remarks"]) + "]") if len(clean(x["remarks"])) > 14 else ""))
+                else:
+                    body(ws, r, 3 + 2 * i, "-", center=True)
+                    body(ws, r, 4 + 2 * i, "")
+            r += 1
+        if not t2keys:
+            body(ws, r, 2, "No amendments or new additions proposed by any bidder")
+            r += 1
+        else:
+            for i in range(n):
+                col = L(3 + 2 * i)
+                add_status_cf(ws, f"{col}{t2first}:{col}{r-1}", f"{col}{t2first}")
         ws.column_dimensions["A"].width = 10
         ws.column_dimensions["B"].width = 48
         for i in range(n):
@@ -572,8 +469,13 @@ def build_scc(groups, out, tmpl):
     wb.save(out)
 
 # ----------------------------------------------------------------- collection
-def collect(inputs, tmp):
-    items = []   # (name_override, path, root)
+def collect(inputs, tmp, problems):
+    """-> [(bidder_name, readable_path (.xlsx/.docx), original_path)]. .doc/.xls/.pdf are converted first."""
+    try:
+        from Backend.Technical import convert
+    except ModuleNotFoundError:
+        from Technical import convert
+    items = []
     for spec in inputs:
         name = None
         if "=" in spec and not Path(spec).exists():
@@ -585,6 +487,10 @@ def collect(inputs, tmp):
             d = Path(tempfile.mkdtemp(dir=tmp))
             with zipfile.ZipFile(p) as z:
                 z.extractall(d)
+            kids = [x for x in d.iterdir() if x.name != "__MACOSX"]
+            while len(kids) == 1 and kids[0].is_dir():          # zip wrapped in one top folder: bidders are inside it
+                d = kids[0]
+                kids = list(d.iterdir())
             p, root = d, d
         else:
             root = p if p.is_dir() else None
@@ -592,71 +498,82 @@ def collect(inputs, tmp):
         for f in files:
             if f.name.startswith(("~$", ".")) or "__MACOSX" in f.parts:
                 continue
-            if f.suffix.lower() in (".xlsx", ".xlsm", ".docx", ".doc", ".pdf"):
-                items.append((name, f, root))
+            if f.suffix.lower() not in convert.SUPPORTED:
+                continue
+            bname = name or derive_bidder_name(f, root)
+            try:
+                rp = convert.normalise(f, Path(tempfile.mkdtemp(dir=tmp)))
+            except Exception as e:
+                problems.append(f"{f.name} ({bname}): {e}")
+                continue
+            items.append((bname, rp, f))
     return items
 
-def run(inputs, out):
-    """Process bidder files; returns dict(gcc=Path|None, scc=Path|None, gcc_bidders=[...], scc_bidders=[...], problems=[...])."""
+def run(inputs, out, mode=None):
+    """Process bidder files; returns dict(gcc=Path|None, scc=Path|None, bidders=[...], problems=[...]).
+    mode: None = everything, "bids" = GCC/SCC only, "eval" = technical / sole-source evaluation reports only."""
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     tmp = tempfile.mkdtemp()
     gcc_groups, scc_groups = OrderedDict(), OrderedDict()
     seen = defaultdict(int)
-    res = dict(gcc=None, scc=None, gcc_bidders=[], scc_bidders=[], problems=[])
-    for name, f, root in collect(inputs, tmp):
-        ext = f.suffix.lower()
-        if ext.startswith(".xls"):
-            kind = "GCC"
-        elif ext in (".docx", ".doc"):
-            kind = "SCC"
-        elif ext == ".pdf":
-            kind = "GCC" if "gcc" in f.name.lower() or (name and "gcc" in name.lower()) else "SCC"
-        else:
-            kind = "SCC"
-
-        bname = name or derive_bidder_name(f, root)
-        data = None
-        try:
-            if ext == ".pdf":
-                if kind == "GCC":
-                    try:
-                        data = parse_gcc(f)
-                    except Exception:
-                        data = parse_scc(f)
-                        kind = "SCC"
-                else:
-                    try:
-                        data = parse_scc(f)
-                    except Exception:
-                        data = parse_gcc(f)
-                        kind = "GCC"
-            else:
-                data = parse_gcc(f) if kind == "GCC" else parse_scc(f)
-        except Exception as e:
-            res["problems"].append(f"{f.name} ({bname}): {e}")
+    res = dict(gcc=None, scc=None, gcc_bidders=[], scc_bidders=[], problems=[], eval=None, evals=[])
+    evals = []
+    for bname, f, orig in collect(inputs, tmp, res["problems"]):
+        kind = "GCC" if f.suffix.lower().startswith(".xls") else "SCC"
+        if mode == "eval" and kind == "GCC":
+            res["problems"].append(f"{orig.name}: not an evaluation report (spreadsheets belong in the GCC / SCC tab)")
             continue
-
+        if kind == "SCC":                       # a .docx may be a TET / SSET evaluation report instead of an SCC form
+            try:
+                from Backend.Technical import evalreport
+            except ModuleNotFoundError:
+                from Technical import evalreport
+            try:
+                ev = evalreport.parse_eval(f)
+                if mode == "bids":
+                    res["problems"].append(f"{orig.name}: this is an evaluation report - upload it in the Technical Evaluation tab")
+                    continue
+                evals.append((bname if mode == "eval" else orig.stem, ev))
+                continue
+            except ValueError as e:
+                if mode == "eval":
+                    res["problems"].append(f"{orig.name}: {e}")
+                    continue
+                if "not an evaluation report" not in str(e):
+                    res["problems"].append(f"{orig.name}: {e}")
+                    continue
+        name = bname
+        try:
+            data = parse_gcc(f) if kind == "GCC" else parse_scc(f)
+        except Exception as e:
+            res["problems"].append(f"{orig.name} ({bname}): {e}")
+            continue
         seen[(kind, bname)] += 1
         if seen[(kind, bname)] > 1:
             bname = f"{bname} ({seen[(kind, bname)]})"
         if kind == "GCC":
             key = (data["cat"], data["code"] or "") if data["cat"] else (4, "075")   # no form code -> assume Goods (Local)
-            gcc_groups.setdefault(key, []).append(dict(name=bname, path=str(f), data=data))
+            gcc_groups.setdefault(key, []).append(dict(name=bname, path=str(orig), data=data))
         else:
             key = (data["cat"],) if data["cat"] else (None, data["title"])
-            scc_groups.setdefault(key, []).append(dict(name=bname, path=str(f), data=data))
-
+            scc_groups.setdefault(key, []).append(dict(name=bname, path=str(orig), data=data))
+    for g in (gcc_groups, scc_groups):                    # same bidder order in every sheet, whatever order files arrived in
+        for lst in g.values():
+            lst.sort(key=lambda b: b["name"].lower())
     if gcc_groups:
         res["gcc"] = out / "GCC_Compliance_Comparison.xlsx"
         build_gcc(gcc_groups, res["gcc"])
-        res["gcc_bidders"] = list(dict.fromkeys(b["name"] for bs in gcc_groups.values() for b in bs))
-
+        res["gcc_bidders"] = [b["name"] for v in gcc_groups.values() for b in v]
     if scc_groups:
         res["scc"] = out / "SCC_Compliance_Comparison.xlsx"
         build_scc(scc_groups, res["scc"], template_scc_text())
-        res["scc_bidders"] = list(dict.fromkeys(b["name"] for bs in scc_groups.values() for b in bs))
-
+        res["scc_bidders"] = [b["name"] for v in scc_groups.values() for b in v]
+    if evals:
+        from Technical import evalreport
+        res["eval"] = out / "Technical_Evaluation_Compliance.xlsx"
+        evalreport.build_eval_workbook(evals, res["eval"])
+        res["evals"] = [evalreport.eval_to_json(lbl, ev) for lbl, ev in evals]
     return res
 
 def main():
@@ -673,8 +590,10 @@ def main():
         print("\nCould not read:")
         for p in res["problems"]:
             print("  -", p)
-    if not res["gcc"] and not res["scc"]:
-        sys.exit("No readable GCC (.xlsx / .pdf) or SCC (.docx / .doc / .pdf) files found.")
+    if res["eval"]:
+        print(f"Evaluation reports: {len(res['evals'])} -> {res['eval']}")
+    if not res["gcc"] and not res["scc"] and not res["eval"]:
+        sys.exit("No readable GCC / SCC / evaluation files found (.xlsx .xls .docx .doc .pdf).")
 
 if __name__ == "__main__":
     main()

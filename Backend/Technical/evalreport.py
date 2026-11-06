@@ -332,8 +332,10 @@ def build_eval_workbook(evals, out):
             ws4.column_dimensions[L(c)].width = 22
         C.finish(ws4, "A5")
 
-        # ---- bid details
-        if ev["bids"]:
+        wb.remove(ws2); wb.remove(ws4)        # Excel shows the same table as the screen: no extra sheets
+
+        # ---- bid details (not shown on screen, so not in the Excel either)
+        if ev["bids"] and False:
             ws3 = wb.create_sheet(C.safe_sheet(pre + "Bid Details", used))
             ws3["A1"] = "DETAILS OF BIDS"
             ws3["A1"].font = Font(bold=True, size=13, color=C.NAVY)
