@@ -89,9 +89,9 @@ function evBox(j){return (ev,idx)=>{
     ${idx===0?`<a class="xl" href="/api/download/${j.job}/eval">⬇ Download Excel (editable)</a>`:''}</div>`}}
 function priceBox(j,probs){
   const rows=Array.isArray(j.rows)?j.rows:[];
-  const body=rows.map(r=>`<tr><td>${esc(r.bidder)}</td><td>${esc(r.currency||'Not stated')}</td><td>${Number(r.total||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</td><td>${esc(r.status||'')}</td><td>${esc(r.source||'')}</td></tr>`).join('');
+  const body=rows.map(r=>`<tr><td>${esc(r.bidder)}</td><td>${esc(r.currency||'Not stated')}</td><td>${Number(r.total||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</td><td>${esc(r.status||'')}</td></tr>`).join('');
   const notes=(j.notes||[]).concat(rows.flatMap(r=>r.warnings||[]));
-  return `<div class="res"><h3>✓ Price evaluation ready</h3><table class="price-table"><thead><tr><th>Bidder</th><th>Currency</th><th>Total</th><th>Ranking</th><th>Source</th></tr></thead><tbody>${body}</tbody></table>${notes.length?`<ul class="warn">${notes.map(esc).map(x=>`<li>${x}</li>`).join('')}</ul>`:''}<a class="xl" href="/api/download/${j.job}/price">⬇ Download Price Schedules Excel</a>${probs?`<div>${probs}</div>`:''}</div>`;
+  return `<div class="res"><h3>✓ Price evaluation ready</h3><table class="price-table"><thead><tr><th>Bidder</th><th>Currency</th><th>Total</th><th>Ranking</th></tr></thead><tbody>${body}</tbody></table>${notes.length?`<ul class="warn">${notes.map(esc).map(x=>`<li>${x}</li>`).join('')}</ul>`:''}<a class="xl" href="/api/download/${j.job}/price">⬇ Download Price Schedules Excel</a>${probs?`<div>${probs}</div>`:''}</div>`;
 }
 panel(document.getElementById('p-bids'),'bids');panel(document.getElementById('p-eval'),'eval');
 panel(document.getElementById('p-price'),'price');

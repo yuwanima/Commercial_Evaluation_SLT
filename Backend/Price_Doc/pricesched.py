@@ -76,7 +76,7 @@ def read_grids(path):
 
 
 # --------------------------------------------------------------------------- locating the two tables
-LOCAL_FIELDS = ["sno", "desc", "qty", "unit_excl", "vat", "nbt", "other", "unit_incl"]
+LOCAL_FIELDS = ["sno", "desc", "qty", "unit_excl", "vat", "sscl", "other", "unit_incl"]
 FOREIGN_FIELDS = ["sno", "desc", "qty", "origin", "fob_unit", "fob_total", "insurance", "freight", "cif", "commission"]
 
 
@@ -108,8 +108,8 @@ def _local_field(t):
         return "qty"
     if "vat" in t:
         return "vat"
-    if "nbt" in t:
-        return "nbt"
+    if "sscl" in t:
+        return "sscl"
     if "other" in t:
         return "other"
     if "price" in t:
@@ -252,7 +252,7 @@ def part_total(kind, items, include_commission=False):
                 if ex is None:
                     notes.append(f"line {k}: no unit price")
                     continue
-                incl = ex * (1 + sum(num(it.get(x)) or 0 for x in ("vat", "nbt", "other")) / 100)
+                incl = ex * (1 + sum(num(it.get(x)) or 0 for x in ("vat", "sscl", "other")) / 100)
                 notes.append(f"line {k}: price including taxes calculated")
             if qty is None:
                 notes.append(f"line {k}: quantity missing (counted as 1)")
@@ -312,9 +312,9 @@ def _detail_sheet(wb, name, e):
     ws["A1"].font = Font(bold=True, size=13, color=C.NAVY)
     ws["A2"] = f"Source: {e['source']}" + (f"   •   Tender No: {e['tender']}" if e.get("tender") else "") + f"   •   Currency: {e['currency'] or '(not stated)'}"
     ws["A2"].font = Font(italic=True, color="595959")
-    heads = (["S/No", "Description", "Qty", "Unit Price (excl. taxes)", "VAT (%)", "NBT (%)", "Other Taxes (%)", "Unit Price (incl. taxes)", "Line Total"] if local else
+    heads = (["S/No", "Description", "Qty", "Unit Price (excl. taxes)", "VAT (%)", "NBT (%)", "Other Taxes (%)", "Unit Price (incl. taxes)"] if local else
              ["S/No", "Description", "Qty", "Country of Origin", "FOB/FCA Unit Price", "FOB/FCA Total Cost", "Total Insurance",
-              "Total Freight", "Total CIF/CIP Cost", "Local Agent's Commission", "Line Total"])
+              "Total Freight", "Total CIF/CIP Cost", "Local Agent's Commission"])
     if not local:
         ws["A3"] = "Include Local Agent's Commission in the total?"
         ws["A3"].font = Font(bold=True)
@@ -348,7 +348,6 @@ def _detail_sheet(wb, name, e):
                 _body(ws, r, 8, f"=D{r}*(1+(N(E{r})+N(F{r})+N(G{r}))/100)", fmt=MONEY, fill=AMBER)
             else:
                 _body(ws, r, 8, None, fmt=MONEY, fill=AMBER)
-            _body(ws, r, 9, f"=IF(ISNUMBER(H{r}),IF(ISNUMBER(C{r}),C{r},1)*H{r},0)", fmt=MONEY, bold=True)
         else:
             _body(ws, r, 4, _text(v("origin")))
             fu, ft = num(v("fob_unit")), num(v("fob_total"))
@@ -369,23 +368,24 @@ def _detail_sheet(wb, name, e):
                 _body(ws, r, 9, f"=N(F{r})+N(G{r})+N(H{r})", fmt=MONEY, fill=AMBER)
             cm = num(v("commission"))
             _body(ws, r, 10, cm if cm is not None else (_text(v("commission")) or None), fmt=MONEY)
-            _body(ws, r, 11, f"=I{r}+IF($D$3=\"Yes\",N(J{r}),0)", fmt=MONEY, bold=True)
         r += 1
     last = r - 1
-    tcol = L(len(heads))
+    tcol = "H" if local else "I"
     _body(ws, r, 2, "TOTAL", bold=True)
     for c in range(1, len(heads) + 1):
         if c != 2:
             _body(ws, r, c, None)
-    _body(ws, r, len(heads), f"=SUM({tcol}{first}:{tcol}{last})", fmt=MONEY, bold=True)
+    total_formula = (f"=SUMPRODUCT(IF(ISNUMBER(C{first}:C{last}),C{first}:C{last},1),H{first}:H{last})" if local
+                     else f"=SUM({tcol}{first}:{tcol}{last})+IF($D$3=\"Yes\",SUM(J{first}:J{last}),0)")
+    _body(ws, r, 8 if local else 9, total_formula, fmt=MONEY, bold=True)
     total_cell = f"{tcol}{r}"
     if e.get("stated") is not None:
         r += 1
         _body(ws, r, 2, "Total stated in the bidder's document", bold=False)
-        _body(ws, r, len(heads), e["stated"], fmt=MONEY)
+        _body(ws, r, 8 if local else 9, e["stated"], fmt=MONEY)
         r += 1
         _body(ws, r, 2, "Difference (calculated − stated)")
-        _body(ws, r, len(heads), f"={tcol}{r-2}-{tcol}{r-1}", fmt=MONEY)
+        _body(ws, r, 8 if local else 9, f"={tcol}{r-2}-{tcol}{r-1}", fmt=MONEY)
     widths = [7, 42, 8, 18, 14, 14, 14, 16, 16, 18, 16][: len(heads)]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[L(i)].width = w
