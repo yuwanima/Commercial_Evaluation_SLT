@@ -15,15 +15,15 @@
 
   @media (prefers-color-scheme:dark){
     :root{
-        --bg:#10151d;
-        --card:#18202b;
-        --ink:#e7ecf3;
-        --mut:#93a1b5;
-        --line:#2b3646;
-        --okbg:#17301f;
-        --badbg:#3a1a17;
-        --navy:#8fb4ee;
-        --blue:#5aa0e0}
+        --bg:#eef2f7;
+        --card:#ffffff;
+        --ink:#1c2530;
+        --mut:#667085;
+        --line:#d9dee7;
+        --okbg:#e6f4ea;
+        --badbg:#fdecea;
+        --navy:#1f3864;
+        --blue:#2e75b6}
     }
 
   *{box-sizing:border-box}
@@ -194,7 +194,7 @@
     color:#fff
     }
 
-  @media(prefers-color-scheme:dark){button.btn{color:#10151d}}
+  button.btn{color:#fff}
 
   button.btn:hover{
     filter:brightness(1.15)
@@ -363,7 +363,7 @@
     padding:11px 20px
     }
 
-  @media(prefers-color-scheme:dark){.xl{color:#10151d}}
+  .xl{color:#fff}
 
   .warn{
     margin:10px 0 0;

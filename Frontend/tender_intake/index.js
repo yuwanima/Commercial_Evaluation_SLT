@@ -25,6 +25,7 @@ function panel(root,mode){
     out.innerHTML=(extra&&extra.length)?`<div class="msg">${extra.map(esc).join('<br>')}</div>`:'';
   }
   function add(list){           // list: [{file, parts}] parts = path segments or null
+    items.length=0;
     const msgs=[];let skipped=0;
     list.forEach(({file,parts})=>{
       if(!EXT.test(file.name)){skipped++;return}

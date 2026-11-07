@@ -52,7 +52,9 @@ def num(v):
 
 
 def _text(v):
-    return C.clean_multiline(v) if v is not None else ""
+    text = C.clean_multiline(v) if v is not None else ""
+    return re.sub(r"\(cid:415\)", "ti", re.sub(r"\(cid:414\)", "tf", text, flags=re.IGNORECASE),
+                  flags=re.IGNORECASE)
 
 
 def read_grids(path):
@@ -121,7 +123,7 @@ def _foreign_field(t):
     t = _compact(t)
     if re.search(r"s/no|^no\.?$|serial|itemno", t):
         return "sno"
-    if "description" in t:
+    if "description" in t or "descrip" in t:
         return "desc"
     if t.startswith("qty") or t == "quantity":
         return "qty"
@@ -223,19 +225,29 @@ def parse_price(path):
     return dict(parts=parts, text=text, tender=m.group(1).strip(".") if m else "")
 
 
-CURRENCY = re.compile(r"\b(USD|EUR|GBP|JPY|CNY|INR|AUD|SGD|CHF|AED|LKR)\b|US\s*\$|\bRs\.?")
+CURRENCY = re.compile(
+    r"\b(USD|EUR|GBP|JPY|CNY|INR|AUD|SGD|CHF|AED|LKR)\b"
+    r"|US\s*\$|[$€£₹]|\bRs\.?"
+, re.IGNORECASE)
 
 
 def detect_currency(text, kind):
     found = []
     for m in CURRENCY.finditer(text):
         s = m.group(0)
-        found.append("LKR" if s.startswith("Rs") else "USD" if s.upper().startswith("US") else s.upper())
+        found.append({
+            "$": "USD",
+            "€": "EUR",
+            "£": "GBP",
+            "₹": "INR",
+        }.get(s, "LKR" if s.lower().startswith("rs") else "USD" if s.upper().startswith("US") else s.upper()))
     if kind == "local":
         return "LKR"
     for c in found:
         if c != "LKR":
             return c
+    if "LKR" in found:
+        return "LKR"
     return ""
 
 
@@ -302,6 +314,8 @@ def build_workbook(entries, out):
     used = set()
     for e in sorted(entries, key=lambda x: (x["bidder"].lower(), x["kind"])):
         _detail_sheet(wb, C.safe_sheet(f"{e['bidder']} - {'Local' if e['kind'] == 'local' else 'Foreign'}", used), e)
+    wb.calculation.fullCalcOnLoad = True
+    wb.calculation.forceFullCalc = True
     wb.save(out)
 
 
@@ -375,9 +389,19 @@ def _detail_sheet(wb, name, e):
     for c in range(1, len(heads) + 1):
         if c != 2:
             _body(ws, r, c, None)
-    total_formula = (f"=SUMPRODUCT(IF(ISNUMBER(C{first}:C{last}),C{first}:C{last},1),H{first}:H{last})" if local
-                     else f"=SUM({tcol}{first}:{tcol}{last})+IF($D$3=\"Yes\",SUM(J{first}:J{last}),0)")
-    _body(ws, r, 8 if local else 9, total_formula, fmt=MONEY, bold=True)
+    if local:
+        total_value = sum(
+            (num(it.get("qty")) if num(it.get("qty")) is not None else 1)
+            * (num(it.get("unit_incl")) if num(it.get("unit_incl")) is not None else
+               (num(it.get("unit_excl")) or 0) * (1 + sum(num(it.get(x)) or 0 for x in ("vat", "sscl", "other")) / 100))
+            for it in e["items"]
+        )
+    else:
+        total_value = part_total("foreign", e["items"])[0]
+    _body(ws, r, 8 if local else 9, total_value, fmt=MONEY, bold=True)
+    if not local:
+        commission_total = sum(num(it.get("commission")) or 0 for it in e["items"])
+        _body(ws, r, 10, commission_total, fmt=MONEY, bold=True)
     total_cell = f"{tcol}{r}"
     if e.get("stated") is not None:
         r += 1
@@ -402,6 +426,16 @@ def _ordinal(n):
 def rank_rows(res):
     """Financial evaluation status = place by price: the lowest quoted total is 1st.
     Totals in different currencies cannot be compared, so each currency is ranked on its own."""
+    res.setdefault("errors", [])
+    missing_currency = [r["bidder"] for r in res["rows"] if not r["currency"]]
+    if missing_currency:
+        bidders = ", ".join(dict.fromkeys(missing_currency))
+        res["errors"].append(
+            "Cannot compare prices because the currency is not stated in the foreign "
+            f"price schedule(s) for: {bidders}. Specify the currency and try again."
+        )
+        return
+
     groups = OrderedDict()
     for r in res["rows"]:
         groups.setdefault(r["currency"], []).append(r)
@@ -422,8 +456,6 @@ def rank_rows(res):
     if len(groups) > 1:
         res["notes"].append("Prices are in different currencies (" + ", ".join(c or "currency not stated" for c in groups) +
                             "), so bidders are ranked within each currency only. Convert to one currency to compare them directly.")
-    if "" in groups and len(groups) > 1 or ("" in groups and any(r["currency"] == "" for r in res["rows"])):
-        res["notes"].append("Currency is not stated in some foreign price schedules — check it before comparing.")
 
 
 # --------------------------------------------------------------------------- driver
@@ -448,7 +480,7 @@ def run(inputs, out):
         for p in data["parts"]:
             entries.append(dict(bidder=bname, kind=p["kind"], items=p["items"], stated=p["stated"],
                                 currency=detect_currency(data["text"], p["kind"]), source=orig.name, tender=data["tender"]))
-    res = dict(file=None, rows=[], problems=problems, notes=[])
+    res = dict(file=None, rows=[], problems=problems, notes=[], errors=[])
     if entries:
         res["file"] = out / "Price_Schedules.xlsx"
         build_workbook(entries, res["file"])
