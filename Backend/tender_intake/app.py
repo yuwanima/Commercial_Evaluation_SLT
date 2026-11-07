@@ -84,6 +84,7 @@ def process():
         return jsonify(error="None of the files could be read.", problems=res["problems"]), 422
     return jsonify(job=job, gcc=bool(res["gcc"]), scc=bool(res["scc"]), eval=False, evals=[],
                    gcc_bidders=res["gcc_bidders"], scc_bidders=res["scc_bidders"],
+                   document_summaries=res["document_summaries"],
                    problems=res["problems"] + [f"{x}: unsupported file type, skipped" for x in bad])
 
 @app.get("/api/download/<job>/<kind>")
