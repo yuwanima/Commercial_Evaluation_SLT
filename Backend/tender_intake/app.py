@@ -73,6 +73,9 @@ def process():
         res = pricesched.run(specs, WORK / job / "out")
         if not res["file"]:
             return jsonify(error="None of the price schedules could be read.", problems=res["problems"]), 422
+        if res["errors"]:
+            return jsonify(error=res["errors"][0], job=job, price=True, rows=res["rows"], errors=res["errors"],
+                           problems=res["problems"] + [f"{x}: unsupported file type, skipped" for x in bad]), 422
         return jsonify(job=job, price=True, rows=res["rows"], notes=res["notes"],
                        problems=res["problems"] + [f"{x}: unsupported file type, skipped" for x in bad])
 

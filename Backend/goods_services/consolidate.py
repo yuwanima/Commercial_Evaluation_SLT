@@ -216,6 +216,20 @@ def body(ws, r, c, v, bold=False, center=False):
         x.font = Font(bold=True)
     return x
 
+def point_note(value):
+    """Keep source wording while making each original line easy to scan."""
+    text = clean_multiline(value)
+    if not text:
+        return ""
+    return "\n".join(f"- {line.strip()}" for line in text.splitlines() if line.strip())
+
+def set_note_row_height(ws, row, *values):
+    lines = 1
+    for value in values:
+        text = str(value or "")
+        lines = max(lines, sum(max(1, (len(line) + 32) // 33) for line in text.splitlines()))
+    ws.row_dimensions[row].height = min(180, max(30, lines * 15))
+
 def add_status_cf(ws, rng, first):
     ws.conditional_formatting.add(rng, FormulaRule(formula=[f'{first}="Complied"'], fill=PatternFill("solid", bgColor=GREEN, fgColor=GREEN)))
     ws.conditional_formatting.add(rng, FormulaRule(formula=[f'{first}="Not Complied"'], fill=PatternFill("solid", bgColor=RED, fgColor=RED)))
@@ -227,7 +241,7 @@ def cf_eligible(ws, rng, first):
     ws.conditional_formatting.add(rng, FormulaRule(formula=[f'LEFT({first},2)="No"'], fill=PatternFill("solid", bgColor=RED, fgColor=RED)))
 
 def finish(ws, freeze, landscape=True):
-    ws.freeze_panes = freeze
+    ws.freeze_panes = None
     ws.sheet_view.zoomScale = 90
     ws.page_setup.orientation = "landscape" if landscape else "portrait"
     ws.page_setup.fitToWidth = 1
@@ -315,39 +329,21 @@ def build_gcc(groups, out):
                 if row and st == "Unclear":
                     st = "Unclear"
                 body(ws, r, 3 + 2 * i, st, center=True)
-                note = row["note"] if row else "Clause not present in this bidder's sheet"
-                if row and st == "Unclear" and row["raw"]:
-                    note = f'[Entry: "{row["raw"]}"] ' + note
-                if row and (_nd(row["desc"]) != _nd(m["desc"]) or row["clause"] != m["clause"]):
-                    note = f'[In this file: Clause {row["clause"]} – {row["desc"]}] ' + note
+                note = point_note(row["note"] if row else "Clause not present in this bidder's sheet")
+                if row and row["raw"] and row["raw"].strip().lower() != st.lower():
+                    note = "\n".join(x for x in (point_note(row["raw"]), note) if x)
                 body(ws, r, 4 + 2 * i, note)
+                set_note_row_height(ws, r, m["desc"], st, note)
             r += 1
         lastr = r - 1
         for i in range(n):
             col = L(3 + 2 * i)
             add_status_cf(ws, f"{col}{first}:{col}{lastr}", f"{col}{first}")
-        # totals
-        r += 1
-        for lbl, crit in (("Complied", "Complied"), ("Partially Complied", "Partially Complied"), ("Not Complied", "Not Complied"), ("Not Filled", "Not Filled"), ("Unclear", "Unclear")):
-            body(ws, r, 2, f"Total — {lbl}", bold=True)
-            body(ws, r, 1, None)
-            for i in range(n):
-                col = L(3 + 2 * i)
-                body(ws, r, 3 + 2 * i, f'=COUNTIF({col}{first}:{col}{lastr},"{crit}")', bold=True, center=True)
-                body(ws, r, 4 + 2 * i, None)
-            r += 1
-        body(ws, r, 2, "Compliance %  (Complied ÷ total clauses)", bold=True)
-        body(ws, r, 1, None)
-        for i in range(n):
-            col = L(3 + 2 * i)
-            x = body(ws, r, 3 + 2 * i, f"={col}{r-5}/COUNTA($A${first}:$A${lastr})", bold=True, center=True)
-            x.number_format = "0.0%"
-            body(ws, r, 4 + 2 * i, None)
         ws.column_dimensions["A"].width = 10
         ws.column_dimensions["B"].width = 48
         for i in range(n):
             ws.column_dimensions[L(3 + 2 * i)].width = 15
-            ws.column_dimensions[L(4 + 2 * i)].width = 34
+            ws.column_dimensions[L(4 + 2 * i)].width = 52
         ws.row_dimensions[hdr].height = 24
         ws.row_dimensions[hdr + 1].height = 32
         finish(ws, f"C{hdr+2}")
@@ -403,24 +399,16 @@ def build_scc(groups, out, tmpl):
                 if k == "other" and st == "Not Filled":
                     st = "-"          # optional free-form row: blank is fine
                 body(ws, r, 3 + 2 * i, st, center=True)
-                note = row["resp"] if row else ""
+                note = point_note(row["resp"] if row else "")
                 if row and len(clean(row.get("stat", ""))) > 14:          # bidder's own remark written in the status column
-                    note = (note + "\n" if note else "") + "[" + clean_multiline(row["stat"]) + "]"
+                    note = "\n".join(x for x in (note, point_note(row["stat"])) if x)
                 body(ws, r, 4 + 2 * i, note)
+                set_note_row_height(ws, r, req, st, note)
             r += 1
         lastr = r - 1
         for i in range(n):
             col = L(3 + 2 * i)
             add_status_cf(ws, f"{col}{first}:{col}{lastr}", f"{col}{first}")
-        r += 1
-        for lbl in ("Complied", "Partially Complied", "Not Complied", "Provided", "Not Filled"):
-            body(ws, r, 2, f"Total — {lbl}", bold=True)
-            body(ws, r, 1, None)
-            for i in range(n):
-                col = L(3 + 2 * i)
-                body(ws, r, 3 + 2 * i, f'=COUNTIF({col}{first}:{col}{lastr},"{lbl}")', bold=True, center=True)
-                body(ws, r, 4 + 2 * i, None)
-            r += 1
         # ---------- Table 2: amendments / new additions proposed by each bidder
         r += 2
         ws.cell(r, 1, "TABLE 2 — AMENDMENTS / NEW ADDITIONS TO THE GENERAL CONDITIONS").font = Font(bold=True, size=12, color=NAVY)
@@ -448,10 +436,14 @@ def build_scc(groups, out, tmpl):
                 if x:
                     s0 = norm_status(x["remarks"]) if clean(x["remarks"]) else "Provided"
                     body(ws, r, 3 + 2 * i, s0 if s0 != "Unclear" else "Provided", center=True)
-                    body(ws, r, 4 + 2 * i, clean_multiline(x["amend"]) + (("\n[" + clean_multiline(x["remarks"]) + "]") if len(clean(x["remarks"])) > 14 else ""))
+                    note = point_note(x["amend"])
+                    if len(clean(x["remarks"])) > 14:
+                        note = "\n".join(y for y in (note, point_note(x["remarks"])) if y)
+                    body(ws, r, 4 + 2 * i, note)
                 else:
                     body(ws, r, 3 + 2 * i, "-", center=True)
                     body(ws, r, 4 + 2 * i, "")
+                set_note_row_height(ws, r, clause, note if x else "")
             r += 1
         if not t2keys:
             body(ws, r, 2, "No amendments or new additions proposed by any bidder")
@@ -464,7 +456,7 @@ def build_scc(groups, out, tmpl):
         ws.column_dimensions["B"].width = 48
         for i in range(n):
             ws.column_dimensions[L(3 + 2 * i)].width = 15
-            ws.column_dimensions[L(4 + 2 * i)].width = 34
+            ws.column_dimensions[L(4 + 2 * i)].width = 52
         finish(ws, f"C{hdr+2}")
     wb.save(out)
 
