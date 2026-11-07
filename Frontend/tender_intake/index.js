@@ -72,8 +72,9 @@ function panel(root,mode){
       if(mode==='eval'){out.innerHTML=(j.evals||[]).map(evBox(j)).join('')+(probs?`<div class="res">${probs}</div>`:'');return}
       if(mode==='price'){out.innerHTML=priceBox(j,probs);return}
       const dl=(k,t,b)=>`<a class="${j[k]?'':'off'}" href="/api/download/${j.job}/${k}"><b>⬇ ${t}</b><span>${j[k]?b.length+' bidder(s): '+esc(b.join(', ')):'No files uploaded'}</span></a>`;
+      const summaries=(j.document_summaries||[]).map(s=>`<div class="doc-summary"><h4>${esc(s.bidder)} — ${esc(s.document)}</h4><ul>${s.points.map(p=>`<li>${esc(p)}</li>`).join('')}</ul></div>`).join('');
       out.innerHTML=`<div class="res"><h3>✓ Comparison ready</h3><div style="color:var(--mut);font-size:14px">Download your Excel files:</div>
-        <div class="dl">${dl('gcc','GCC_Compliance_Comparison.xlsx',j.gcc_bidders)}${dl('scc','SCC_Compliance_Comparison.xlsx',j.scc_bidders)}</div>${probs}</div>`;
+        <div class="dl">${dl('gcc','GCC_Compliance_Comparison.xlsx',j.gcc_bidders)}${dl('scc','SCC_Compliance_Comparison.xlsx',j.scc_bidders)}</div>${summaries?`<div class="doc-summaries"><h4>Document checks</h4>${summaries}</div>`:''}${probs}</div>`;
     }catch(e){out.innerHTML='<div class="msg">Could not reach the server: '+esc(String(e))+'</div>'}
     finally{go.disabled=false;go.textContent=goText}
   };

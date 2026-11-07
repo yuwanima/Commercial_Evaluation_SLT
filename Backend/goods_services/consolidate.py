@@ -40,6 +40,27 @@ def clean_multiline(v):
     s = clean(v)
     return re.sub(r"\n\s*\n+", "\n", re.sub(r" *\n *", "\n", s)).strip()
 
+def clean_note(v):
+    """Normalize note whitespace while retaining paragraph breaks from the source."""
+    if v is None:
+        return ""
+    text = str(v).replace("\r\n", "\n").replace("\r", "\n").replace("\xa0", " ")
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n[ \t]+", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    heading = re.compile(r"\s+(?=[A-Z][A-Za-z][A-Za-z /&'()-]{1,40}\s+[–—-]\s+)")
+    parts = []
+    end = 0
+    for match in heading.finditer(text):
+        if text[:match.start()].rstrip().endswith((".", ":", ";")):
+            parts.append(text[end:match.start()].rstrip())
+            end = match.end()
+            parts.append(text[match.start():match.end()].strip())
+    if parts:
+        parts.append(text[end:].lstrip())
+        text = "\n\n".join(part for part in parts if part)
+    return text.strip()
+
 def norm_status(raw):
     """Return (status, raw). Status: Complied / Partially Complied / Not Complied / Not Filled / Unclear."""
     s = clean(raw)
@@ -65,6 +86,52 @@ def derive_bidder_name(path, root):
     stem = re.sub(r"[_\-–.&]+", " ", stem)
     stem = re.sub(r"\s+", " ", stem).strip(" -_")
     return stem or path.stem
+
+def document_text(path):
+    """Return searchable text from a normalized GCC workbook or SCC document."""
+    if path.suffix.lower() in (".xlsx", ".xlsm"):
+        wb = openpyxl.load_workbook(path, data_only=True)
+        return "\n".join(
+            clean(cell.value)
+            for ws in wb.worksheets
+            for row in ws.iter_rows()
+            for cell in row
+            if clean(cell.value)
+        )
+    if docx is None:
+        return ""
+    d = docx.Document(path)
+    parts = [p.text for p in d.paragraphs]
+    parts.extend(cell.text for table in d.tables for row in table.rows for cell in row.cells)
+    return "\n".join(clean_multiline(x) for x in parts if clean_multiline(x))
+
+def document_summary(path, bidder, kind):
+    text = document_text(path)
+    lower = text.lower()
+    tender = re.search(r"(?i)\btender\s*(?:no\.?|number)\s*[:\-]?\s*([A-Za-z0-9/.\-]+)", text)
+    dates = re.findall(
+        r"\b(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}[/-]\d{1,2}[/-]\d{1,2}"
+        r"|\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)"
+        r"\s+\d{4})\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    signature = bool(re.search(r"signature\s+of\s+(?:the\s+)?tender|tenderer.?s?\s+signature|authorized\s+sign", lower))
+    signed_value = bool(re.search(r"signature.{0,80}(yes|signed|present|✓|✔)", lower, re.DOTALL))
+    frank = bool(re.search(r"official\s+(?:frank|stamp|seal)|official\s+seal|company\s+stamp|rubber\s+stamp", lower))
+    return {
+        "bidder": bidder,
+        "document": path.name,
+        "type": "GCC" if kind == "GCC" else "SCC",
+        "points": [
+            f"Document type: {'GCC' if kind == 'GCC' else 'SCC'}",
+            f"Tender number: {tender.group(1) if tender else 'Not found'}",
+            f"Signature section: {'Present' if signature else 'Not found'}",
+            f"Signature completed: {'Found' if signed_value else 'Not found'}",
+            f"Date: {', '.join(dict.fromkeys(dates)) if dates else 'Not found'}",
+            f"Official frank / stamp / seal reference: {'Present' if frank else 'Not found'}",
+        ],
+    }
 
 # ----------------------------------------------------------------- GCC reader
 def parse_gcc(path):
@@ -94,7 +161,7 @@ def parse_gcc(path):
             status = norm_status(ws.cell(r, 3).value)
             rows.append(dict(clause=a, desc=b, status=status,
                              raw=clean(ws.cell(r, 3).value),
-                             note=clean_multiline(ws.cell(r, 4).value)))
+                             note=clean_note(ws.cell(r, 4).value)))
         if rows:
             cat = FORM_CODE_TO_CAT.get(code)
             return dict(cat=cat, code=code, rows=rows,
@@ -121,7 +188,7 @@ def _rows(table):
         cells, seen = [], set()
         for c in row.cells:
             key = id(c._tc)
-            cells.append("" if key in seen else clean_multiline(c.text))
+            cells.append("" if key in seen else clean_note(c.text))
             seen.add(key)
         out.append(cells)
     return out
@@ -217,18 +284,23 @@ def body(ws, r, c, v, bold=False, center=False):
     return x
 
 def point_note(value):
-    """Keep source wording while making each original line easy to scan."""
-    text = clean_multiline(value)
+    """Keep source wording and paragraph structure for readable Excel notes."""
+    text = clean_note(value)
     if not text:
         return ""
-    return "\n".join(f"- {line.strip()}" for line in text.splitlines() if line.strip())
+    points = []
+    for paragraph in re.split(r"\n{2,}", text):
+        lines = [line.strip() for line in paragraph.splitlines() if line.strip()]
+        if lines:
+            points.append(" ".join(lines))
+    return "\n\n".join(points)
 
 def set_note_row_height(ws, row, *values):
     lines = 1
     for value in values:
         text = str(value or "")
         lines = max(lines, sum(max(1, (len(line) + 32) // 33) for line in text.splitlines()))
-    ws.row_dimensions[row].height = min(180, max(30, lines * 15))
+    ws.row_dimensions[row].height = min(300, max(30, lines * 15))
 
 def add_status_cf(ws, rng, first):
     ws.conditional_formatting.add(rng, FormulaRule(formula=[f'{first}="Complied"'], fill=PatternFill("solid", bgColor=GREEN, fgColor=GREEN)))
@@ -509,7 +581,8 @@ def run(inputs, out, mode=None):
     tmp = tempfile.mkdtemp()
     gcc_groups, scc_groups = OrderedDict(), OrderedDict()
     seen = defaultdict(int)
-    res = dict(gcc=None, scc=None, gcc_bidders=[], scc_bidders=[], problems=[], eval=None, evals=[])
+    res = dict(gcc=None, scc=None, gcc_bidders=[], scc_bidders=[], document_summaries=[],
+               problems=[], eval=None, evals=[])
     evals = []
     for bname, f, orig in collect(inputs, tmp, res["problems"]):
         kind = "GCC" if f.suffix.lower().startswith(".xls") else "SCC"
@@ -550,6 +623,7 @@ def run(inputs, out, mode=None):
         else:
             key = (data["cat"],) if data["cat"] else (None, data["title"])
             scc_groups.setdefault(key, []).append(dict(name=bname, path=str(orig), data=data))
+        res["document_summaries"].append(document_summary(f, bname, kind))
     for g in (gcc_groups, scc_groups):                    # same bidder order in every sheet, whatever order files arrived in
         for lst in g.values():
             lst.sort(key=lambda b: b["name"].lower())

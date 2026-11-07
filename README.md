@@ -25,6 +25,7 @@
     * read every GCC compliance sheet (.xlsx / .pdf)  -> GCC_Compliance_Comparison.xlsx
     * read every SCC form (.docx / .doc / .pdf)       -> SCC_Compliance_Comparison.xlsx
     Each bidder gets its own column group so all bidders can be compared clause by clause.
+    Explanatory notes are wrapped and displayed as separate points in the Excel cells for easier reading.
 
     The web front-end also has a **Price Schedule** tab. Upload completed local or
     foreign schedules to view calculated totals and currency-aware rankings, then
