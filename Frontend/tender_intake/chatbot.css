@@ -203,3 +203,126 @@ textarea:focus {
         width: 100%;
     }
 }
+
+/* Vendor submission upload */
+
+.upload-card {
+    border-top: 4px solid #1764a0;
+}
+
+.upload-card h2 {
+    color: #123b68;
+}
+
+input[type="file"] {
+    width: 100%;
+    padding: 13px;
+    border: 1px dashed #94a3b8;
+    border-radius: 7px;
+    background: #f8fafc;
+    font: inherit;
+    cursor: pointer;
+}
+
+input[type="file"]:focus {
+    outline: 2px solid #8bb8e8;
+    border-color: #2765a0;
+}
+
+.upload-hint {
+    color: #64748b;
+    font-size: 13px;
+    line-height: 1.6;
+    margin-top: 10px;
+}
+
+.selected-files {
+    color: #334155;
+    font-size: 13px;
+    line-height: 1.8;
+    overflow-wrap: anywhere;
+}
+
+#upload-file-count {
+    color: #64748b;
+    font-size: 13px;
+}
+
+#upload-button {
+    background: #1764a0;
+    color: white;
+    border: none;
+    border-radius: 7px;
+    padding: 12px 24px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+#upload-button:hover {
+    background: #104c7c;
+}
+
+#upload-button:disabled {
+    background: #94a3b8;
+    cursor: not-allowed;
+}
+
+.result-metadata {
+    color: #64748b;
+    font-size: 13px;
+    overflow-wrap: anywhere;
+}
+
+.result-status {
+    font-weight: 600;
+    color: #1764a0;
+}
+
+.summary-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+    margin: 22px 0;
+}
+
+.summary-item {
+    background: #f1f6fb;
+    padding: 18px 10px;
+    border-radius: 8px;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.summary-item strong {
+    color: #123b68;
+    font-size: 24px;
+}
+
+.summary-item span {
+    color: #64748b;
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.review-warning {
+    margin-top: 20px;
+    padding: 15px;
+    border-radius: 7px;
+    background: #fff7e6;
+    border: 1px solid #f0d59b;
+    color: #805b13;
+    line-height: 1.6;
+}
+
+@media (max-width: 600px) {
+    #upload-button {
+        width: 100%;
+    }
+
+    .summary-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}

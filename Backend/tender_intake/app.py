@@ -1,6 +1,7 @@
 
 import re, shutil, sys, tempfile, uuid
 from pathlib import Path
+import os
 
 BASE = Path(__file__).resolve().parent
 BACKEND_DIR = BASE.parent
@@ -8,13 +9,34 @@ FRONTEND_DIR = BACKEND_DIR.parent / "Frontend" / "tender_intake"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from flask import Flask, jsonify, request, send_file, send_from_directory, abort
-
+from flask import Flask, jsonify, request, send_file, send_from_directory, abort, render_template
 from goods_services import consolidate
 from Price_Doc import pricesched
 from Technical.evalreport import build_eval_workbook, eval_to_json, parse_eval
+from chatbot_routes import chatbot_bp
 
-app = Flask(__name__, static_folder=str(FRONTEND_DIR), static_url_path="")
+app = Flask(
+    __name__,
+    template_folder=str(FRONTEND_DIR),
+    static_folder=str(FRONTEND_DIR),
+    static_url_path="",
+)
+SECRET_KEY = os.environ.get("SECRET_KEY")
+
+if not SECRET_KEY:
+    raise RuntimeError("SECRET_KEY environment variable is required.")
+
+app.secret_key = SECRET_KEY
+
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=(
+        os.environ.get("SESSION_COOKIE_SECURE", "false").lower()
+        in ("1", "true", "yes")
+    ),
+)
+app.register_blueprint(chatbot_bp)
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024
 WORK = Path(tempfile.gettempdir()) / "store"
 WORK.mkdir(exist_ok=True)

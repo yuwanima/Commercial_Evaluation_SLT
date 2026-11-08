@@ -7,7 +7,9 @@ from retrieval_engine import ALLOWED_CATEGORIES
 
 HOST = "127.0.0.1"
 PORT = 8765
-MAX_REQUEST_SIZE = 16 * 1024
+MAX_REQUEST_SIZE = 512 * 1024
+MAX_VENDOR_EVIDENCE_SECTIONS = 20
+MAX_VENDOR_EVIDENCE_CHARS = 30000
 
 
 class RAGRequestHandler(BaseHTTPRequestHandler):
@@ -68,6 +70,45 @@ class RAGRequestHandler(BaseHTTPRequestHandler):
             category = data.get("category")
             top_k = data.get("top_k", 5)
 
+            vendor_evidence = data.get("vendor_evidence", [])
+
+            if not isinstance(vendor_evidence, list):
+                self.send_json(400, {
+                    "error": "Invalid vendor document evidence."
+                })
+                return
+
+            if len(vendor_evidence) > MAX_VENDOR_EVIDENCE_SECTIONS:
+                self.send_json(400, {
+                    "error": "Too many vendor evidence sections."
+                })
+                return
+
+            evidence_chars = 0
+
+            for item in vendor_evidence:
+                if not isinstance(item, dict):
+                    self.send_json(400, {
+                        "error": "Invalid vendor evidence section."
+                    })
+                    return
+
+                if not all(
+                    isinstance(item.get(field), str)
+                    for field in ("file_name", "location", "text")
+                ):
+                    self.send_json(400, {
+                        "error": "Invalid vendor evidence fields."
+                    })
+                    return
+
+                evidence_chars += len(item["text"])
+
+            if evidence_chars > MAX_VENDOR_EVIDENCE_CHARS:
+                self.send_json(400, {
+                    "error": "Vendor evidence exceeds the permitted size."
+                })
+                return
             if not isinstance(question, str) or not question.strip():
                 self.send_json(400, {
                     "error": "Please enter a procurement question."
@@ -106,6 +147,7 @@ class RAGRequestHandler(BaseHTTPRequestHandler):
                 question=question,
                 category=category,
                 top_k=top_k,
+                vendor_evidence=vendor_evidence,
             )
 
             self.send_json(200, result)
