@@ -480,3 +480,33 @@
   @keyframes r{to{
     transform:rotate(360deg)
     }}
+/* ContractWise AI link in the main header */
+header .wrap {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+header a.btn {
+    display: inline-block;
+    background: #ffffff;
+    color: #1f3864;
+    text-decoration: none;
+    font-weight: 700;
+    padding: 10px 18px;
+    border-radius: 8px;
+    border: 2px solid #ffffff;
+    white-space: nowrap;
+}
+
+header a.btn:hover {
+    background: #eaf1fb;
+    color: #1f3864;
+}
+
+@media (max-width: 500px) {
+    header .wrap {
+        flex-wrap: wrap;
+    }
+}

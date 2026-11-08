@@ -1,4 +1,4 @@
-﻿document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", () => {
     // Existing question-and-answer elements
     const form = document.getElementById("chatbot-form");
     const questionInput = document.getElementById("question");
@@ -191,9 +191,104 @@ displayUploadResult(data);
         }
     });
 
+    // Safely convert supported Markdown into formatted HTML.
+    function renderMarkdown(markdown) {
+        function escapeHtml(value) {
+            return value
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#39;");
+        }
+
+        function formatInline(value) {
+            return escapeHtml(value)
+                .replace(/`([^`]+)`/g, "<code>$1</code>")
+                .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+                .replace(/__(.+?)__/g, "<strong>$1</strong>")
+                .replace(/\*(.+?)\*/g, "<em>$1</em>");
+        }
+
+        const lines = String(markdown).split(/\r?\n/);
+        const output = [];
+
+        let paragraph = [];
+        let listType = null;
+
+        function closeList() {
+            if (listType) {
+                output.push(listType === "ul" ? "</ul>" : "</ol>");
+                listType = null;
+            }
+        }
+
+        function flushParagraph() {
+            if (paragraph.length) {
+                output.push("<p>" + paragraph.map(formatInline).join("<br>") + "</p>");
+                paragraph = [];
+            }
+        }
+
+        for (const line of lines) {
+            const trimmed = line.trim();
+
+            if (!trimmed) {
+                flushParagraph();
+                closeList();
+                continue;
+            }
+
+            const heading = trimmed.match(/^(#{1,6})\s+(.+)$/);
+
+            if (heading) {
+                flushParagraph();
+                closeList();
+
+                const level = Math.min(heading[1].length + 1, 6);
+                output.push(
+                    `<h${level}>${formatInline(heading[2])}</h${level}>`
+                );
+                continue;
+            }
+
+            if (/^(\*\s*\*\s*\*|-{3,}|_{3,})$/.test(trimmed)) {
+                flushParagraph();
+                closeList();
+                output.push("<hr>");
+                continue;
+            }
+
+            const bullet = trimmed.match(/^[-*+]\s+(.+)$/);
+            const numbered = trimmed.match(/^\d+[.)]\s+(.+)$/);
+
+            if (bullet || numbered) {
+                flushParagraph();
+
+                const requiredType = bullet ? "ul" : "ol";
+
+                if (listType !== requiredType) {
+                    closeList();
+                    output.push(requiredType === "ul" ? "<ul>" : "<ol>");
+                    listType = requiredType;
+                }
+
+                output.push("<li>" + formatInline((bullet || numbered)[1]) + "</li>");
+                continue;
+            }
+
+            closeList();
+            paragraph.push(trimmed);
+        }
+
+        flushParagraph();
+        closeList();
+
+        return output.join("\n");
+    }
     // Display existing chatbot answer
     function displayAnswer(data) {
-        answerText.textContent = data.answer || "No answer was returned.";
+        answerText.innerHTML = renderMarkdown(data.answer || "No answer was returned.");
 
         sourcesList.replaceChildren();
 
