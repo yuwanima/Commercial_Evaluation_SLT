@@ -135,8 +135,14 @@ def build_vendor_source_references(vendor_evidence):
         if not isinstance(text, str) or not text.strip():
             continue
 
-        file_name = item.get("file_name") or "Unknown document"
-        location = item.get("location") or "Location unavailable"
+        file_name = item.get("file_name")
+        location = item.get("location")
+
+        if not isinstance(file_name, str) or not file_name.strip():
+            file_name = "Unknown document"
+
+        if not isinstance(location, str) or not location.strip():
+            location = "Location unavailable"
 
         references.append(
             f"[V{index}] Vendor document: {file_name} | "

@@ -65,6 +65,7 @@ def load_submission_evidence(submission_id):
     return extraction
 
 
+
 def select_relevant_evidence(question, evidence):
     """Select relevant vendor document sections within a size limit."""
 
@@ -99,10 +100,17 @@ def select_relevant_evidence(question, evidence):
         if item.get("requires_ocr"):
             continue
 
+        file_name = item.get("file_name")
+        location = item.get("location")
+
+        if not isinstance(file_name, str) or not file_name.strip():
+            file_name = "Unknown document"
+
+        if not isinstance(location, str) or not location.strip():
+            location = "Location unavailable"
+
         searchable_text = (
-            item.get("file_name", "") + " " +
-            item.get("location", "") + " " +
-            text
+            file_name + " " + location + " " + text
         ).lower()
 
         document_words = set(
@@ -114,8 +122,8 @@ def select_relevant_evidence(question, evidence):
         candidates.append({
             "index": index,
             "score": score,
-            "file_name": item.get("file_name", "Unknown document"),
-            "location": item.get("location", "Location unavailable"),
+            "file_name": file_name,
+            "location": location,
             "text": text.strip(),
         })
 
@@ -128,7 +136,7 @@ def select_relevant_evidence(question, evidence):
     total_chars = 0
 
     for item in candidates:
-        if item["score"] == 0 and selected:
+        if question_words and item["score"] == 0:
             continue
 
         remaining = MAX_VENDOR_EVIDENCE_CHARS - total_chars
@@ -156,13 +164,26 @@ def select_relevant_evidence(question, evidence):
     # incorrectly claiming that the uploaded document is empty.
     if not selected:
         for item in candidates[:5]:
+            remaining = MAX_VENDOR_EVIDENCE_CHARS - total_chars
+
+            if remaining <= 0:
+                break
+
+            text = item["text"][:min(2000, remaining)]
+
+            if not text.strip():
+                continue
+
             selected.append({
                 "file_name": item["file_name"],
                 "location": item["location"],
-                "text": item["text"][:2000],
+                "text": text,
             })
 
+            total_chars += len(text)
+
     return selected
+
 
 
 @chatbot_bp.get("/chatbot")
