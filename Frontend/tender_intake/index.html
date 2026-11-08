@@ -1,36 +1,37 @@
-﻿<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<title>Commercial Evaluation</title>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="stylesheet" href="{{ url_for('static', filename='index.css') }}">
+<title>SLT</title>
+<link rel="stylesheet" href="index.css">
 </head>
-
-<body class="{{ kind }}">
-    <main>
-        <nav class="tabs">{% for k, t in types.items() %}<a class="{{ 'on' if k == kind }}" href="{{ url_for('page', kind=k) }}">{{ t.get('label', t.tab ~ ' Reports') }}</a>{% endfor %}</nav>
-        <p><a class='btn alt' href="{{ url_for('chatbot.chatbot_page') }}">ContractWise AI</a></p>
-            <h1>{{ spec.title }}</h1>
-            {% with m = get_flashed_messages() %}{% for x in m %}<div class="flash">{{ x }}</div>{% endfor %}{% endwith %}
-        <div class="card">
-            <form method="post" action="{{ url_for('process', kind=kind) }}" enctype="multipart/form-data">
-                <p>{{ spec.help }}</p>
-                <input type="file" name="reports" accept="{{ spec.get('ext', ('.docx',)) | join(',') }}" multiple required>
-                <p><button class="btn" type="submit">Process</button></p>
-            </form>
-        </div>
-
-        <div class="card">
-            <b>Processed {{ spec.tab }} reports</b>
-            {% if not jobs %}<p><small>Nothing processed yet.</small></p>{% else %}
-            <table>
-                <tr><th>When</th><th>Report(s)</th><th></th></tr>
-                {% for j in jobs %}<tr><td>{{ j.time }}</td>
-                <td>{% for r in j.reports %}{{ r.file }} <small>({{ r.summary or (r.fields ~ ' fields, ' ~ r.bidders ~ ' bidder(s)') }})</small><br>
-                    {% for n in r.notes %}<small>&#9888; {{ n }}</small><br>{% endfor %}{% endfor %}</td>
-                <td><a class="btn alt" href="{{ url_for('view', kind=kind, job_id=j.id) }}">View</a></td></tr>{% endfor %}
-            </table>
-            {% endif %}
-        </div>
-    </main>
+<body>
+<header><div class="wrap"><h1>Commericial Evaluation</h1><a href="/chatbot" class="btn">ContractWise AI</a></div></header>
+<main><div class="wrap">
+  <nav class="tabs" role="tablist"><button type="button" class="on" data-tab="bids" role="tab">GCC / SCC Comparison</button><button type="button" data-tab="eval" role="tab">Technical Evaluation</button><button type="button" data-tab="price" role="tab">Price Schedule</button></nav>
+  <div class="panel" id="p-bids">
+    <section><h2>Upload bidder files</h2><p class="sub">GCC sheets (.xlsx, .xls, .pdf) and SCC forms (.docx, .doc, .pdf).</p>
+      <div class="zone"><b>Drop files or folders here</b><span>.xlsx · .xls · .docx · .doc · .pdf · .zip</span></div>
+      <div class="pick"><label>Choose files<input class="f-files" type="file" multiple accept=".xlsx,.xlsm,.xls,.docx,.doc,.pdf,.zip"></label><label>Choose folder<input class="f-dir" type="file" webkitdirectory multiple></label></div>
+      <ul class="files"></ul><div class="count"></div></section>
+    <div class="actions"><button class="btn go" type="button">Generate comparison</button></div><div class="out"></div>
+  </div>
+  <div class="panel" id="p-eval" hidden>
+    <section><h2>Upload technical evaluation reports</h2><p class="sub">Filled-in Technical Evaluation (TET) or Sole Source Evaluation (SSET) reports — .docx, .doc or .pdf, or a folder of them.</p>
+      <div class="zone"><b>Drop reports or folders here</b><span>.docx · .doc · .pdf · .zip</span></div>
+      <div class="pick"><label>Choose files<input class="f-files" type="file" multiple accept=".docx,.doc,.pdf,.zip"></label><label>Choose folder<input class="f-dir" type="file" webkitdirectory multiple></label></div>
+      <ul class="files"></ul><div class="count"></div></section>
+    <div class="actions"><button class="btn go" type="button">Check compliance</button></div><div class="out"></div>
+  </div>
+  <div class="panel" id="p-price" hidden>
+    <section><h2>Upload price schedules</h2><p class="sub">Filled-in local or foreign price schedules — .xlsx, .xlsm, .docx, .doc or .pdf, or a folder of bidder schedules.</p>
+      <div class="zone"><b>Drop schedules or folders here</b><span>.xlsx · .xlsm · .docx · .doc · .pdf · .zip</span></div>
+      <div class="pick"><label>Choose files<input class="f-files" type="file" multiple accept=".xlsx,.xlsm,.docx,.doc,.pdf,.zip"></label><label>Choose folder<input class="f-dir" type="file" webkitdirectory multiple></label></div>
+      <ul class="files"></ul><div class="count"></div></section>
+    <div class="actions"><button class="btn go" type="button">Evaluate prices</button></div><div class="out"></div>
+  </div>
+</div></main>
+<script src="index.js"></script>
 </body>
 </html>
