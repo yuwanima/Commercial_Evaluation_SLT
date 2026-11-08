@@ -9,27 +9,13 @@
 <body>
 <header><div class="wrap"><h1>Commericial Evaluation</h1><a href="/chatbot" class="btn">ContractWise AI</a></div></header>
 <main><div class="wrap">
-  <nav class="tabs" role="tablist"><button type="button" class="on" data-tab="bids" role="tab">GCC / SCC Comparison</button><button type="button" data-tab="eval" role="tab">Technical Evaluation</button><button type="button" data-tab="price" role="tab">Price Schedule</button></nav>
-  <div class="panel" id="p-bids">
-    <section><h2>Upload bidder files</h2><p class="sub">GCC sheets (.xlsx, .xls, .pdf) and SCC forms (.docx, .doc, .pdf).</p>
-      <div class="zone"><b>Drop files or folders here</b><span>.xlsx · .xls · .docx · .doc · .pdf · .zip</span></div>
+  <nav class="tabs" role="tablist"><button type="button" class="on" data-tab="all" role="tab">Technical Evaluation Reports / GCC & SCC Compliance Reports / Price Documents</button></nav>
+  <div class="panel" id="p-all">
+    <section><h2>Upload all tender documents</h2><p class="sub">Upload GCC, SCC, technical evaluation reports, and price documents together. The system will identify and process each document.</p>
+      <div class="zone"><b>Drop documents or folders here</b><span>.xlsx · .xls · .docx · .doc · .pdf · .zip</span></div>
       <div class="pick"><label>Choose files<input class="f-files" type="file" multiple accept=".xlsx,.xlsm,.xls,.docx,.doc,.pdf,.zip"></label><label>Choose folder<input class="f-dir" type="file" webkitdirectory multiple></label></div>
       <ul class="files"></ul><div class="count"></div></section>
-    <div class="actions"><button class="btn go" type="button">Generate comparison</button></div><div class="out"></div>
-  </div>
-  <div class="panel" id="p-eval" hidden>
-    <section><h2>Upload technical evaluation reports</h2><p class="sub">Filled-in Technical Evaluation (TET) or Sole Source Evaluation (SSET) reports — .docx, .doc or .pdf, or a folder of them.</p>
-      <div class="zone"><b>Drop reports or folders here</b><span>.docx · .doc · .pdf · .zip</span></div>
-      <div class="pick"><label>Choose files<input class="f-files" type="file" multiple accept=".docx,.doc,.pdf,.zip"></label><label>Choose folder<input class="f-dir" type="file" webkitdirectory multiple></label></div>
-      <ul class="files"></ul><div class="count"></div></section>
-    <div class="actions"><button class="btn go" type="button">Check compliance</button></div><div class="out"></div>
-  </div>
-  <div class="panel" id="p-price" hidden>
-    <section><h2>Upload price schedules</h2><p class="sub">Filled-in local or foreign price schedules — .xlsx, .xlsm, .docx, .doc or .pdf, or a folder of bidder schedules.</p>
-      <div class="zone"><b>Drop schedules or folders here</b><span>.xlsx · .xlsm · .docx · .doc · .pdf · .zip</span></div>
-      <div class="pick"><label>Choose files<input class="f-files" type="file" multiple accept=".xlsx,.xlsm,.docx,.doc,.pdf,.zip"></label><label>Choose folder<input class="f-dir" type="file" webkitdirectory multiple></label></div>
-      <ul class="files"></ul><div class="count"></div></section>
-    <div class="actions"><button class="btn go" type="button">Evaluate prices</button></div><div class="out"></div>
+    <div class="actions"><button class="btn go" type="button">Process all documents</button></div><div class="out"></div>
   </div>
 </div></main>
 <script src="index.js"></script>
