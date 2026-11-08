@@ -36,6 +36,36 @@ def _share(cells):
     cells = [c for c in cells if C.clean(c)]
     return (sum(_is_status(c) for c in cells) / len(cells), len(cells)) if cells else (0, 0)
 
+_BIDDER_WORDS = re.compile(r"\b(bidder|tenderer|supplier|vendor|company|manufacturer)\b", re.I)
+_BID_DETAIL_WORDS = re.compile(
+    r"\b(name|brand|model|make|address|country|origin|registration|contact|"
+    r"authorization|authority|validity|quotation|offer|bid|price|agent)\b", re.I)
+
+def _bid_details(rows):
+    """Return a bidder-detail table as headers and rows, or None for other tables."""
+    if len(rows) < 2:
+        return None
+    cleaned = [[C.clean_multiline(c) for c in row] for row in rows]
+    for header_index in range(min(3, len(cleaned) - 1)):
+        header = cleaned[header_index]
+        header_text = " ".join(header)
+        if not _BIDDER_WORDS.search(header_text) or not _BID_DETAIL_WORDS.search(header_text):
+            continue
+        headers = [C.clean(x).replace("\n", " ") for x in header]
+        body = [
+            row for row in cleaned[header_index + 1:]
+            if any(C.clean(x) for x in row[1:])
+            or (C.clean(row[0]) and not re.fullmatch(r"\d+", C.clean(row[0])))
+        ]
+        if not body:
+            continue
+        status_share, status_count = _share([cell for row in body for cell in row[1:]])
+        if status_count >= 2 and status_share >= 0.6:
+            continue
+        width = len(headers)
+        return dict(headers=headers, rows=[(row + [""] * width)[:width] for row in body])
+    return None
+
 # ----------------------------------------------------------------------------- parsing
 def parse_eval(path):
     d = docx.Document(path)
@@ -63,11 +93,8 @@ def parse_eval(path):
     # ---- details of bids
     bids = None
     for rows in tables:
-        h = " ".join(rows[0]).lower() if rows else ""
-        if "bidder" in h and ("brand" in h or "validity" in h or "authority" in h):
-            body = [r for r in rows[1:] if any(C.clean(x) for x in r[1:]) or (C.clean(r[0]) and not re.fullmatch(r"\d+", C.clean(r[0])))]
-            if body:
-                bids = dict(headers=[C.clean(x).replace("\n", " ") for x in rows[0]], rows=body)
+        bids = _bid_details(rows)
+        if bids:
             break
 
     # ---- compliance matrices
@@ -116,18 +143,38 @@ def eval_to_json(label, ev):
     def cell(t):
         return dict(t=t, c=status_class(t))
     all_bidders, not_eligible = [], set()
+    issues = {}
+    stated_results = {}
     for m in ev["matrices"]:
         for bn in m["headers"][1:]:
             if bn not in all_bidders:
                 all_bidders.append(bn)
+            issues.setdefault(bn, [])
+            stated_results.setdefault(bn, [])
         for area, vals in m["rows"]:
             for j, v in enumerate(vals):
+                if j + 1 < len(m["headers"]) and status_class(v) in ("partial", "bad"):
+                    issues[m["headers"][1 + j]].append(dict(area=area, status=v))
                 if status_class(v) in ("partial", "bad") and j + 1 < len(m["headers"]):
                     not_eligible.add(m["headers"][1 + j])
+        if m["overall"]:
+            for j, v in enumerate(m["overall"]):
+                if j + 1 < len(m["headers"]) and v:
+                    stated_results[m["headers"][1 + j]].append(v)
     shortlist = dict(eligible=[b for b in all_bidders if b not in not_eligible],
                      excluded=[b for b in all_bidders if b in not_eligible])
+    recommendations = [
+        dict(
+            bidder=bidder,
+            eligible=bidder not in not_eligible,
+            recommendation="Proceed to commercial evaluation" if bidder not in not_eligible else "Do not proceed to commercial evaluation",
+            stated_results=stated_results[bidder],
+            issues=issues[bidder],
+        )
+        for bidder in all_bidders
+    ]
     return dict(label=label, type=ev["type"], title=ev["title"], meta=ev["meta"], bids=ev["bids"],
-                shortlist=shortlist,
+                shortlist=shortlist, recommendations=recommendations,
                 matrices=[dict(headers=m["headers"],
                                rows=[dict(area=a, cells=[cell(v) for v in vals]) for a, vals in m["rows"]],
                                overall=[cell(v) for v in m["overall"]] if m["overall"] else None,
