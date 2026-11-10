@@ -29,6 +29,70 @@ def status_class(t):
         return "ok"
     return "other"
 
+def _is_ineligible_status(t):
+    return status_class(t) == "bad"
+
+def _recommendation_value(headers, values, pattern):
+    for header, value in zip(headers, values):
+        if re.search(pattern, header, re.I) and C.clean(value):
+            return C.clean_multiline(value)
+    return "Not available in technical report"
+
+def _recommendation_table(all_bidders, not_eligible, bids):
+    bid_values = {}
+    if bids:
+        headers = bids["headers"][1:]
+        for row in bids["rows"]:
+            if row and C.clean(row[0]):
+                bid_values[C.clean(row[0]).lower()] = row[1:]
+    table = []
+    for bidder in all_bidders:
+        values = bid_values.get(bidder.lower(), [])
+        headers = bids["headers"][1:] if bids else []
+        table.append({
+            "bidder": bidder,
+            "financial_bid_opening": "Yes" if bidder not in not_eligible else "No",
+            "evaluated_bom_included": _recommendation_value(
+                headers, values, r"\b(bom|bill of quantities|bill of materials)\b"),
+            "missing_price_items": _recommendation_value(
+                headers, values, r"missing.*price|price.*missing|separate.*sealed"),
+            "previous_purchase_price": _recommendation_value(
+                headers, values, r"previous.*purchase|purchase.*price"),
+            "reference_price": _recommendation_value(
+                headers, values, r"reference.*price|market.*price"),
+            "more_suitable": "Not enough comparable data",
+        })
+    comparable = []
+    for item in table:
+        known = sum(
+            item[key] != "Not available in technical report"
+            for key in ("evaluated_bom_included", "missing_price_items",
+                        "previous_purchase_price", "reference_price")
+        )
+        if item["financial_bid_opening"] == "Yes" and known:
+            score = 0
+            bom = item["evaluated_bom_included"].lower()
+            missing = item["missing_price_items"].lower()
+            if bom.startswith("yes") or "included" in bom:
+                score += 2
+            if missing.startswith("no") or "none" in missing:
+                score += 2
+            if item["previous_purchase_price"] != "Not available in technical report":
+                score += 1
+            if item["reference_price"] != "Not available in technical report":
+                score += 1
+            comparable.append((score, item))
+    if comparable:
+        comparable.sort(key=lambda pair: pair[0], reverse=True)
+        rank = 0
+        previous_score = None
+        for position, (score, item) in enumerate(comparable, 1):
+            if score != previous_score:
+                rank = position
+                previous_score = score
+            item["more_suitable"] = f"{rank} place"
+    return table
+
 def _is_status(t):
     return bool(STATUS_START.match(C.clean(t)))
 
@@ -153,14 +217,17 @@ def eval_to_json(label, ev):
             stated_results.setdefault(bn, [])
         for area, vals in m["rows"]:
             for j, v in enumerate(vals):
-                if j + 1 < len(m["headers"]) and status_class(v) in ("partial", "bad"):
+                if j + 1 < len(m["headers"]) and _is_ineligible_status(v):
                     issues[m["headers"][1 + j]].append(dict(area=area, status=v))
-                if status_class(v) in ("partial", "bad") and j + 1 < len(m["headers"]):
+                if _is_ineligible_status(v) and j + 1 < len(m["headers"]):
                     not_eligible.add(m["headers"][1 + j])
         if m["overall"]:
             for j, v in enumerate(m["overall"]):
                 if j + 1 < len(m["headers"]) and v:
                     stated_results[m["headers"][1 + j]].append(v)
+                    if _is_ineligible_status(v):
+                        issues[m["headers"][1 + j]].append(dict(area="Overall result", status=v))
+                        not_eligible.add(m["headers"][1 + j])
     shortlist = dict(eligible=[b for b in all_bidders if b not in not_eligible],
                      excluded=[b for b in all_bidders if b in not_eligible])
     recommendations = [
@@ -173,8 +240,10 @@ def eval_to_json(label, ev):
         )
         for bidder in all_bidders
     ]
+    recommendation_table = _recommendation_table(all_bidders, not_eligible, ev["bids"])
     return dict(label=label, type=ev["type"], title=ev["title"], meta=ev["meta"], bids=ev["bids"],
                 shortlist=shortlist, recommendations=recommendations,
+                recommendation_table=recommendation_table,
                 matrices=[dict(headers=m["headers"],
                                rows=[dict(area=a, cells=[cell(v) for v in vals]) for a, vals in m["rows"]],
                                overall=[cell(v) for v in m["overall"]] if m["overall"] else None,
@@ -231,7 +300,7 @@ def build_eval_workbook(evals, out):
         ws["A2"].font = Font(italic=True, color="595959")
         r = 4
         nc_rows = []
-        not_eligible = set()      # bidders with >=1 partial/not-complied item, across all matrices in this report
+        not_eligible = set()      # bidders with >=1 non-complied item, across all matrices in this report
         all_bidders = []
         first_header_row = r
         for mx in ev["matrices"]:
@@ -256,7 +325,7 @@ def build_eval_workbook(evals, out):
                 for j in range(n):
                     v = vals[j] if j < len(vals) else ""
                     C.body(ws, r, 2 + j, v, center=True)
-                    if status_class(v) in ("partial", "bad"):
+                    if _is_ineligible_status(v):
                         nc_rows.append((mx["headers"][1 + j], area, v))
                         not_eligible.add(mx["headers"][1 + j])
                 r += 1
@@ -274,6 +343,9 @@ def build_eval_workbook(evals, out):
             for j in range(n):
                 v = (mx["overall"][j] if mx["overall"] and j < len(mx["overall"]) else "") or "Pending"
                 y = C.body(ws, r, 2 + j, v, bold=True, center=True)
+                if _is_ineligible_status(v):
+                    nc_rows.append((mx["headers"][1 + j], "Overall result", v))
+                    not_eligible.add(mx["headers"][1 + j])
             dvo.add(f"B{ovr}:{L(1 + n)}{ovr}")
             _cf(ws, f"B{ovr}:{L(1 + n)}{ovr}", f"B{ovr}", "overall")
             r += 2
@@ -288,19 +360,18 @@ def build_eval_workbook(evals, out):
                     col = L(2 + j)
                     C.body(ws, r, 2 + j, "=" + f.format(c=col, a=first, b=max(last, first)), bold=True, center=True)
                 r += 1
-            # Eligibility is derived strictly from the compliance cells, not from whatever the
-            # "Overall result" row says — a single partial/not-complied item excludes the bidder
-            # from commercial evaluation, so this cannot silently say "Qualified" by mistake.
+            # Partial compliance is accepted; only non-compliance or a disqualified overall
+            # result excludes the bidder from commercial evaluation.
             elig_row = r
-            C.body(ws, r, 1, "Eligible for Commercial Evaluation", bold=True)
+            #C.body(ws, r, 1, "Eligible for Commercial Evaluation", bold=True)
             for j in range(n):
                 col = L(2 + j)
                 x = C.body(ws, r, 2 + j,
-                           f'=IF({col}{srow+1}+{col}{srow+2}=0,"Yes — proceed","No — excluded (non-compliance)")',
+                           f'=IF(OR({col}{srow+2}>0,LEFT({col}{ovr},4)="Disq"),"No — excluded (non-compliance)","Yes — proceed")',
                            bold=True, center=True)
             _cf_eligible(ws, f"B{elig_row}:{L(1+n)}{elig_row}", f"B{elig_row}")
             r += 1
-            C.body(ws, r, 1, "Flag: report's stated result conflicts with compliance", bold=False)
+            #C.body(ws, r, 1, "Flag: report's stated result conflicts with compliance", bold=False)
             for j in range(n):
                 col = L(2 + j)
                 x = C.body(ws, r, 2 + j,
@@ -309,16 +380,57 @@ def build_eval_workbook(evals, out):
                            center=True)
                 x.font = Font(italic=True, size=9, color="B42318")
             r += 3
+        # ---- editable recommendation table
+        C.body(ws, r, 1, "Recommendations for Commercial Evaluation", bold=True)
+        ws.cell(r, 1).font = Font(bold=True, size=13, color=C.NAVY)
+        r += 1
+        C.hcell(ws, r, 1, "FIELD")
+        for j, bidder in enumerate(all_bidders, 2):
+            C.hcell(ws, r, j, bidder)
+        r += 1
+        recommendation_table = _recommendation_table(all_bidders, not_eligible, ev["bids"])
+        recommendation_rows = [
+            ("Recommended for Financial Bid Opening (Yes/No)",
+             [item["financial_bid_opening"] for item in recommendation_table]),
+            ("Evaluated BOM included? (Yes/No)",
+             [item["evaluated_bom_included"] for item in recommendation_table]),
+            ("Missing price items needing separate sealed envelope? (Yes/No — list items)",
+             [item["missing_price_items"] for item in recommendation_table]),
+            ("Previous purchase price (with period & quantity)",
+             [item["previous_purchase_price"] for item in recommendation_table]),
+            ("Reference price of similar items (market/previous)",
+             [item["reference_price"] for item in recommendation_table]),
+            ("More Suitable",
+             [item["more_suitable"] for item in recommendation_table]),
+        ]
+        recommendation_first = r
+        recommendation_validation = DataValidation(
+            type="list", formula1='"Yes,No"', allow_blank=True, showErrorMessage=False)
+        ws.add_data_validation(recommendation_validation)
+        for field, values in recommendation_rows:
+            C.body(ws, r, 1, field, bold=True)
+            for j, value in enumerate(values, 2):
+                C.body(ws, r, j, value, center=True)
+            r += 1
+        recommendation_validation.add(
+            f"B{recommendation_first}:{L(1 + len(all_bidders))}{recommendation_first}")
+        _cf_eligible(
+            ws,
+            f"B{recommendation_first}:{L(1 + len(all_bidders))}{recommendation_first}",
+            f"B{recommendation_first}",
+        )
+        r += 2
         ws.column_dimensions["A"].width = 36
-        ncols = max(len(m["headers"]) for m in ev["matrices"])
+        ws.column_dimensions["A"].width = 58
+        ncols = max(max(len(m["headers"]) for m in ev["matrices"]), len(all_bidders) + 1)
         for j in range(2, ncols + 1):
             ws.column_dimensions[L(j)].width = 22
         C.finish(ws, f"B{first_header_row+1}")
         ws.cell(r, 1, f"Generated {datetime.now():%Y-%m-%d %H:%M} from {label}. Cells are editable (drop-down lists); counts and review checks update automatically.").font = Font(italic=True, size=9, color="7F7F7F")
 
         # ---- non-compliances (report instruction 4b): a record of why each bidder was excluded.
-        # Non-compliant / partially-compliant bidders do NOT go forward to commercial evaluation,
-        # so this sheet is an audit trail, not a worksheet for deciding whether to still accept them.
+        # Non-compliant bidders do NOT go forward to commercial evaluation, so this sheet
+        # is an audit trail rather than a worksheet for deciding whether to accept them.
         ws2 = wb.create_sheet(C.safe_sheet(pre + "Non-compliances", used))
         ws2["A1"] = "NON-COMPLIANCES — bidders below are excluded from commercial evaluation (Section 4b)"
         ws2["A1"].font = Font(bold=True, size=13, color=C.NAVY)
@@ -336,12 +448,11 @@ def build_eval_workbook(evals, out):
             ws2.column_dimensions[c].width = w
         C.finish(ws2, "A4")
 
-        # ---- commercial evaluation shortlist: only bidders with ZERO non-compliance, per the report's
-        # own rule that a single non-compliance or partial compliance excludes a bid from commercial evaluation.
+        # ---- commercial evaluation shortlist: bidders with no non-compliance.
         ws4 = wb.create_sheet(C.safe_sheet(pre + "Commercial Eval Shortlist", used))
-        ws4["A1"] = "SHORTLIST FOR COMMERCIAL EVALUATION — fully-complied bidders only"
+        ws4["A1"] = "SHORTLIST FOR COMMERCIAL EVALUATION — no non-compliance"
         ws4["A1"].font = Font(bold=True, size=13, color=C.NAVY)
-        ws4["A2"] = "Any bidder with a partial or non-compliance in the Compliance Matrix is excluded here automatically."
+        ws4["A2"] = "Bidders with partial compliance may proceed; bidders with non-compliance are excluded automatically."
         ws4["A2"].font = Font(italic=True, color="595959")
         bid_hdrs = ev["bids"]["headers"][1:] if ev["bids"] else []
         bid_by_name = {}
