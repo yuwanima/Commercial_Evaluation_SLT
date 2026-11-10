@@ -308,15 +308,70 @@ MONEY = "#,##0.00"
 
 
 def build_workbook(entries, out):
-    """entries: list of dict(bidder, kind, items, stated, currency, source, tender). One sheet per company and supply type."""
+    """Create the two editable price-comparison tabs from local-supply entries."""
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
     used = set()
-    for e in sorted(entries, key=lambda x: (x["bidder"].lower(), x["kind"])):
-        _detail_sheet(wb, C.safe_sheet(f"{e['bidder']} - {'Local' if e['kind'] == 'local' else 'Foreign'}", used), e)
+    local_entries = [e for e in entries if e["kind"] == "local"]
+    _comparison_sheet(wb, C.safe_sheet("Unit Price Excl Taxes", used), local_entries, "unit_excl",
+                      "Unit Price (excl. taxes)")
+    _comparison_sheet(wb, C.safe_sheet("Unit Price Incl Taxes", used), local_entries, "unit_incl",
+                      "Unit Price (incl. taxes)")
+    wb.calculation.calcMode = "auto"
     wb.calculation.fullCalcOnLoad = True
     wb.calculation.forceFullCalc = True
     wb.save(out)
+
+
+def _comparison_sheet(wb, name, entries, price_field, price_title):
+    """Create the bidder-column comparison layout used by the uploaded price template."""
+    ws = wb.create_sheet(name)
+    bidders = sorted({e["bidder"] for e in entries}, key=str.lower)
+    items = OrderedDict()
+    for entry in entries:
+        for index, item in enumerate(entry["items"], 1):
+            description = re.sub(r"\s+", " ", _text(item.get("desc")))
+            key = description.casefold() if description else f"__row_{index}"
+            row = items.setdefault(key, {"sno": _text(item.get("sno")) or index, "description": description,
+                                         "prices": {}})
+            value = num(item.get(price_field))
+            if price_field == "unit_incl" and value is None:
+                excluded = num(item.get("unit_excl"))
+                if excluded is not None:
+                    taxes = sum(num(item.get(field)) or 0 for field in ("vat", "sscl", "other"))
+                    value = excluded * (1 + taxes / 100)
+            if value is not None:
+                row["prices"][entry["bidder"]] = value
+    ws["A1"] = f"LOCAL SUPPLIES — {price_title}"
+    ws["A1"].font = Font(bold=True, size=13, color=C.NAVY)
+    ws["A2"] = "Comparison of bidder unit prices. Cells are editable. Final Amount is calculated automatically for each company."
+    ws["A2"].font = Font(italic=True, color="595959")
+    header_row = 4
+    _hcell(ws, header_row, 1, "S/No")
+    _hcell(ws, header_row, 2, "Description")
+    for column, bidder in enumerate(bidders, 3):
+        _hcell(ws, header_row, column, bidder)
+    first_data_row = header_row + 1
+    for row_number, item in enumerate(items.values(), first_data_row):
+        _body(ws, row_number, 1, item["sno"], center=True)
+        _body(ws, row_number, 2, item["description"])
+        for column, bidder in enumerate(bidders, 3):
+            value = item["prices"].get(bidder)
+            _body(ws, row_number, column, value, fmt=MONEY, fill=INPUT, center=True)
+    final_row = max(first_data_row, header_row + len(items) + 1)
+    _body(ws, final_row, 1, "", fill=PatternFill("solid", fgColor="D9EAF7"))
+    _body(ws, final_row, 2, "FINAL AMOUNT", fill=PatternFill("solid", fgColor="D9EAF7"), bold=True)
+    for column in range(3, len(bidders) + 3):
+        bidder = bidders[column - 3]
+        total = sum(item["prices"].get(bidder, 0) or 0 for item in items.values())
+        _body(ws, final_row, column, total,
+              fmt=MONEY, fill=PatternFill("solid", fgColor="D9EAF7"), bold=True, center=True)
+    ws.column_dimensions["A"].width = 8
+    ws.column_dimensions["B"].width = 42
+    for column in range(3, len(bidders) + 3):
+        ws.column_dimensions[L(column)].width = 22
+    C.finish(ws, "C5")
+    ws.freeze_panes = "C5"
 
 
 def _detail_sheet(wb, name, e):
@@ -491,9 +546,22 @@ def run(inputs, out):
             warn = [f"{label}: {n}" for n in notes]
             if e["stated"] is not None and abs(e["stated"] - total) > 0.5:
                 warn.append(f"{label}: calculated total {total:,.2f} differs from the total stated in the document ({e['stated']:,.2f})")
-            row = rows.setdefault((e["bidder"], e["currency"]), dict(bidder=e["bidder"], currency=e["currency"], total=0.0,
-                                                                  lines=0, status="To be evaluated", source=[], warnings=[]))
+            row = rows.setdefault((e["bidder"], e["currency"]), dict(
+                bidder=e["bidder"], currency=e["currency"], total=0.0,
+                unit_price_excl_taxes=None, unit_price_incl_taxes=None,
+                lines=0, status="To be evaluated", source=[], warnings=[]))
             row["total"] += total
+            if e["kind"] == "local":
+                excl = sum(num(item.get("unit_excl")) or 0 for item in e["items"])
+                incl = sum(
+                    num(item.get("unit_incl")) if num(item.get("unit_incl")) is not None else
+                    (num(item.get("unit_excl")) or 0) * (
+                        1 + sum(num(item.get(field)) or 0 for field in ("vat", "sscl", "other")) / 100
+                    )
+                    for item in e["items"]
+                )
+                row["unit_price_excl_taxes"] = (row["unit_price_excl_taxes"] or 0) + excl
+                row["unit_price_incl_taxes"] = (row["unit_price_incl_taxes"] or 0) + incl
             row["lines"] += len(e["items"])
             row["warnings"] += warn
             if e["source"] not in row["source"]:

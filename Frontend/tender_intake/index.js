@@ -45,17 +45,21 @@ function panel(root,mode){
     out.innerHTML=(extra&&extra.length)?`<div class="msg">${extra.map(esc).join('<br>')}</div>`:'';
   }
   function add(list){           // list: [{file, parts}] parts = path segments or null
-    items.length=0;
-    const msgs=[];let skipped=0;
+    const msgs=[];let skipped=0,duplicates=0;
     list.forEach(({file,parts})=>{
       if(!EXT.test(file.name)){skipped++;return}
       if(file.name.startsWith('~$')){return}
       if(mode==='bids'&&/\.(docx|doc|pdf)$/i.test(file.name)&&EVALNAME.test(file.name)){msgs.push(`${file.name}: looks like an evaluation report — upload it in the Technical Evaluation tab`);return}
       const fromFolder=parts&&parts.length>1;
-      items.push({file,kind:kindOf(file.name),path:fromFolder?parts.join('/'):null,
+      const path=fromFolder?parts.join('/'):null;
+      const duplicate=items.some(it=>it.file.name===file.name&&it.file.size===file.size&&
+        it.file.lastModified===file.lastModified&&(it.path||'')===(path||''));
+      if(duplicate){duplicates++;return}
+      items.push({file,kind:kindOf(file.name),path:path,
         name:mode==='eval'?strip(file.name):(fromFolder&&(folderName(parts)||guessRaw(file.name)||parts[0]))||guess(file.name)});
     });
     if(skipped)msgs.push(`${skipped} file(s) skipped (unsupported type)`);
+    if(duplicates)msgs.push(`${duplicates} duplicate file(s) already selected`);
     render(msgs);
   }
   root.querySelector('.f-files').onchange=e=>{add([...e.target.files].map(f=>({file:f,parts:null})));e.target.value=''};
@@ -126,23 +130,29 @@ function evBox(j){return (ev,idx)=>{
   }).join('')}</div>`:'';
   const nonEligibility=Array.isArray(ev.recommendations)?ev.recommendations.filter(r=>!r.eligible&&Array.isArray(r.issues)&&r.issues.length).map(r=>`<article class="non-eligibility"><h5>${esc(r.bidder)}</h5><ul>${r.issues.map(x=>`<li><b>${esc(x.area)}:</b> ${esc(x.status)}</li>`).join('')}</ul></article>`).join(''):'';
   const reasons=nonEligibility?`<div class="non-eligibility-section"><h4>Why bidders are not eligible for commercial evaluation</h4>${nonEligibility}</div>`:'';
+  const recommendationTable=Array.isArray(ev.recommendation_table)&&ev.recommendation_table.length?`<section class="recommendation-table-section"><h4>5. Recommendations for Commercial Evaluation</h4><p class="recommendation-table-note">Review each bidder below. Partially complied bidders may proceed; non-complied bidders are excluded.</p><div class="tw"><table class="recommendation-table"><thead><tr><th>FIELD</th>${ev.recommendation_table.map(r=>`<th>${esc(r.bidder)}</th>`).join('')}</tr></thead><tbody>
+    <tr><th>Recommended for Financial Bid Opening (Yes/No)</th>${ev.recommendation_table.map(r=>`<td class="${r.financial_bid_opening==='Yes'?'ok':'bad'}">${esc(r.financial_bid_opening)}</td>`).join('')}</tr>
+    <tr><th>Evaluated BOM included? (Yes/No)</th>${ev.recommendation_table.map(r=>`<td>${esc(r.evaluated_bom_included)}</td>`).join('')}</tr>
+    <tr><th>Missing price items needing separate sealed envelope? (Yes/No — list items)</th>${ev.recommendation_table.map(r=>`<td>${esc(r.missing_price_items)}</td>`).join('')}</tr>
+    <tr><th>Previous purchase price (with period & quantity)</th>${ev.recommendation_table.map(r=>`<td>${esc(r.previous_purchase_price)}</td>`).join('')}</tr>
+    <tr><th>Reference price of similar items (market/previous)</th>${ev.recommendation_table.map(r=>`<td>${esc(r.reference_price)}</td>`).join('')}</tr>
+    <tr><th>More Suitable</th>${ev.recommendation_table.map(r=>`<td>${esc(r.more_suitable)}</td>`).join('')}</tr>
+  </tbody></table></div></section>`:'';
   const mats=ev.matrices.map(m=>`<div class="tw"><table class="mx"><thead><tr>${m.headers.map(x=>`<th>${esc(x)}</th>`).join('')}</tr></thead><tbody>`+
     m.rows.map(r=>`<tr><td>${esc(r.area)}</td>${r.cells.map(c=>`<td class="${c.c}">${esc(c.t)}</td>`).join('')}</tr>`).join('')+
     (m.overall?`<tr class="ov"><td>Overall result (as stated in report)</td>${m.overall.map(c=>`<td class="${c.c}">${esc(c.t)}</td>`).join('')}</tr>`:'')+
     (m.eligible?`<tr class="ov"><td>Eligible for Commercial Evaluation</td>${m.eligible.map(e=>`<td class="${e?'ok':'bad'}">${e?'Yes — proceed':'No — excluded'}</td>`).join('')}</tr>`:'')+
     `</tbody></table></div>`).join('<br>');
-  return `<div class="evalbox"><h3>${ev.type==='SSET'?'Sole Source Evaluation':'Technical Evaluation'} — compliance by company</h3><div class="meta">File: ${esc(ev.label)}</div><div class="report-details"><h4>Report details</h4>${metaRows||'<div class="meta">No additional report details were detected.</div>'}</div><div class="recommendations">${bidDetails||'<h4>Details of Bidders</h4><div class="meta">No bidder details were detected.</div>'}</div>${mats}${reasons}
+  return `<div class="evalbox"><h3>${ev.type==='SSET'?'Sole Source Evaluation':'Technical Evaluation'} — compliance by company</h3><div class="meta">File: ${esc(ev.label)}</div><div class="report-details"><h4>Report details</h4>${metaRows||'<div class="meta">No additional report details were detected.</div>'}</div><div class="recommendations">${bidDetails||'<h4>Details of Bidders</h4><div class="meta">No bidder details were detected.</div>'}</div>${mats}${recommendationTable}${reasons}
     ${idx===0?`<a class="xl" href="/api/download/${j.job}/eval">⬇ Download Excel (editable)</a>`:''}</div>`}}
 function priceBox(j,probs){
   const rows=(Array.isArray(j.rows)?j.rows:[]).slice().sort((a,b)=>{
-    const currency=String(a.currency||'Not stated').localeCompare(String(b.currency||'Not stated'));
-    return currency||((Number(a.rank)||Number.MAX_SAFE_INTEGER)-(Number(b.rank)||Number.MAX_SAFE_INTEGER))||String(a.bidder||'').localeCompare(String(b.bidder||''));
+    return String(a.bidder||'').localeCompare(String(b.bidder||''));
   });
-  const ordinal=n=>n===1?'1st':n===2?'2nd':n===3?'3rd':`${n}th`;
-  const ranking=r=>Number(r.rank)?`${ordinal(Number(r.rank))}${Number(r.rank)===1?' — Lowest evaluated price':''}`:(r.status||'');
-  const body=rows.map(r=>`<tr><td>${esc(r.bidder)}</td><td>${esc(r.currency||'Not stated')}</td><td>${Number(r.total||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</td><td>${esc(ranking(r))}</td></tr>`).join('');
+  const amount=value=>value===null||value===undefined?'Not available':Number(value).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+  const body=rows.map(r=>`<tr><td>${esc(r.bidder)}</td><td>${esc(r.currency||'Not stated')}</td><td>${esc(amount(r.unit_price_excl_taxes))}</td><td>${esc(amount(r.unit_price_incl_taxes))}</td></tr>`).join('');
   const notes=(j.notes||[]).concat(rows.flatMap(r=>r.warnings||[]));
-  return `<div class="res"><h3>✓ Price evaluation ready</h3><div class="price-summary">All bidder prices (${rows.length})</div><table class="price-table"><thead><tr><th>Bidder</th><th>Currency</th><th>Total</th><th>Ranking</th></tr></thead><tbody>${body||'<tr><td colspan="4">No bidder prices detected.</td></tr>'}</tbody></table>${notes.length?`<ul class="warn">${notes.map(esc).map(x=>`<li>${x}</li>`).join('')}</ul>`:''}<a class="xl" href="/api/download/${j.job}/price">⬇ Download Price Schedules Excel</a>${probs?`<div>${probs}</div>`:''}</div>`;
+  return `<div class="res"><h3>✓ Price evaluation ready</h3><div class="price-summary">All bidder prices (${rows.length})</div><table class="price-table"><thead><tr><th>Bidder</th><th>Currency</th><th>Total Unit Price (excl. taxes)</th><th>Total Unit Price (incl. taxes)</th></tr></thead><tbody>${body||'<tr><td colspan="4">No bidder prices detected.</td></tr>'}</tbody></table>${notes.length?`<ul class="warn">${notes.map(esc).map(x=>`<li>${x}</li>`).join('')}</ul>`:''}<a class="xl" href="/api/download/${j.job}/price">⬇ Download Price Schedules Excel</a>${probs?`<div>${probs}</div>`:''}</div>`;
 }
 panel(document.getElementById('p-all'),'all');
 document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
