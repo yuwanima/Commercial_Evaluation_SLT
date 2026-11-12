@@ -308,15 +308,13 @@ MONEY = "#,##0.00"
 
 
 def build_workbook(entries, out):
-    """Create the two editable price-comparison tabs from local-supply entries."""
+    """Create one source-detail tab for each company."""
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
     used = set()
-    local_entries = [e for e in entries if e["kind"] == "local"]
-    _comparison_sheet(wb, C.safe_sheet("Unit Price Excl Taxes", used), local_entries, "unit_excl",
-                      "Unit Price (excl. taxes)")
-    _comparison_sheet(wb, C.safe_sheet("Unit Price Incl Taxes", used), local_entries, "unit_incl",
-                      "Unit Price (incl. taxes)")
+    for bidder in OrderedDict((e["bidder"], None) for e in entries):
+        company_entries = [e for e in entries if e["bidder"] == bidder]
+        _company_sheet(wb, C.safe_sheet(bidder, used), company_entries)
     wb.calculation.calcMode = "auto"
     wb.calculation.fullCalcOnLoad = True
     wb.calculation.forceFullCalc = True
@@ -374,28 +372,37 @@ def _comparison_sheet(wb, name, entries, price_field, price_title):
     ws.freeze_panes = "C5"
 
 
-def _detail_sheet(wb, name, e):
+def _company_sheet(wb, name, entries):
     ws = wb.create_sheet(name)
+    row = 1
+    for entry in entries:
+        row = _detail_sheet(wb, name, entry, start_row=row, ws=ws) + 2
+
+
+def _detail_sheet(wb, name, e, start_row=1, ws=None):
+    if ws is None:
+        ws = wb.create_sheet(name)
+    base = start_row - 1
     local = e["kind"] == "local"
-    ws["A1"] = f"{e['bidder']} — PRICE SCHEDULE ({'Part A: Local supplies' if local else 'Part B: Foreign supplies'})"
-    ws["A1"].font = Font(bold=True, size=13, color=C.NAVY)
-    ws["A2"] = f"Source: {e['source']}" + (f"   •   Tender No: {e['tender']}" if e.get("tender") else "") + f"   •   Currency: {e['currency'] or '(not stated)'}"
-    ws["A2"].font = Font(italic=True, color="595959")
+    ws.cell(base + 1, 1, f"{e['bidder']} — PRICE SCHEDULE ({'Part A: Local supplies' if local else 'Part B: Foreign supplies'})")
+    ws.cell(base + 1, 1).font = Font(bold=True, size=13, color=C.NAVY)
+    ws.cell(base + 2, 1, f"Source: {e['source']}" + (f"   •   Tender No: {e['tender']}" if e.get("tender") else "") + f"   •   Currency: {e['currency'] or '(not stated)'}")
+    ws.cell(base + 2, 1).font = Font(italic=True, color="595959")
     heads = (["S/No", "Description", "Qty", "Unit Price (excl. taxes)", "VAT (%)", "NBT (%)", "Other Taxes (%)", "Unit Price (incl. taxes)"] if local else
              ["S/No", "Description", "Qty", "Country of Origin", "FOB/FCA Unit Price", "FOB/FCA Total Cost", "Total Insurance",
               "Total Freight", "Total CIF/CIP Cost", "Local Agent's Commission"])
     if not local:
-        ws["A3"] = "Include Local Agent's Commission in the total?"
-        ws["A3"].font = Font(bold=True)
-        ws.merge_cells("A3:C3")
-        ws["D3"] = "No"
-        ws["D3"].fill = INPUT
-        ws["D3"].border = C.BORDER
-        ws["D3"].alignment = C.CENTER
+        ws.cell(base + 3, 1, "Include Local Agent's Commission in the total?")
+        ws.cell(base + 3, 1).font = Font(bold=True)
+        ws.merge_cells(start_row=base + 3, start_column=1, end_row=base + 3, end_column=3)
+        ws.cell(base + 3, 4, "No")
+        ws.cell(base + 3, 4).fill = INPUT
+        ws.cell(base + 3, 4).border = C.BORDER
+        ws.cell(base + 3, 4).alignment = C.CENTER
         dv = DataValidation(type="list", formula1='"Yes,No"', allow_blank=False)
         ws.add_data_validation(dv)
-        dv.add("D3")
-    hdr = 4
+        dv.add(ws.cell(base + 3, 4))
+    hdr = base + 4
     for c, t in enumerate(heads, 1):
         _hcell(ws, hdr, c, t)
     r = first = hdr + 1
@@ -407,7 +414,7 @@ def _detail_sheet(wb, name, e):
         q = num(v("qty"))
         _body(ws, r, 3, q if q is not None else _text(v("qty")) or None, fmt="#,##0.##", center=True)
         if local:
-            for col, f in ((4, "unit_excl"), (5, "vat"), (6, "nbt"), (7, "other")):
+            for col, f in ((4, "unit_excl"), (5, "vat"), (6, "sscl"), (7, "other")):
                 n = num(v(f))
                 _body(ws, r, col, n if n is not None else (_text(v(f)) or None), fmt=MONEY if col == 4 else "0.##")
             n = num(v("unit_incl"))
@@ -470,7 +477,7 @@ def _detail_sheet(wb, name, e):
         ws.column_dimensions[L(i)].width = w
     ws.row_dimensions[hdr].height = 34
     C.finish(ws, f"C{hdr+1}")
-    return total_cell
+    return r
 
 
 # --------------------------------------------------------------------------- ranking
@@ -514,6 +521,14 @@ def rank_rows(res):
 
 
 # --------------------------------------------------------------------------- driver
+def _output_filename(entries):
+    tenders = list(OrderedDict.fromkeys(
+        re.sub(r'[\\/:*?"<>|]+', "-", str(e.get("tender", "")).strip())
+        for e in entries if str(e.get("tender", "")).strip()
+    ))
+    return "Price_Schedules" + (f"_{'-'.join(tenders)}" if tenders else "") + ".xlsx"
+
+
 def run(inputs, out):
     """-> dict(file, rows=[...], problems=[...])"""
     out = Path(out)
@@ -535,9 +550,12 @@ def run(inputs, out):
         for p in data["parts"]:
             entries.append(dict(bidder=bname, kind=p["kind"], items=p["items"], stated=p["stated"],
                                 currency=detect_currency(data["text"], p["kind"]), source=orig.name, tender=data["tender"]))
-    res = dict(file=None, rows=[], problems=problems, notes=[], errors=[])
+    res = dict(file=None, rows=[], problems=problems, notes=[], errors=[],
+               tenders=list(OrderedDict.fromkeys(
+                   e["tender"] for e in entries if e.get("tender")
+               )))
     if entries:
-        res["file"] = out / "Price_Schedules.xlsx"
+        res["file"] = out / _output_filename(entries)
         build_workbook(entries, res["file"])
         rows = OrderedDict()
         for e in sorted(entries, key=lambda x: (x["bidder"].lower(), x["kind"])):

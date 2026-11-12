@@ -14,7 +14,7 @@
     pip install flask openpyxl python-docx pdfplumber
     python app.py            ->  open http://127.0.0.1:5000
 
-## Output workbook (one sheet per table)
+## Output workbook (one detail tab per company)
     Bid compliance consolidator  (GCC Excel/PDF + SCC Word/PDF  ->  comparison Excel files)
 
     Usage
@@ -29,7 +29,9 @@
 
     The web front-end also has a **Price Schedule** tab. Upload completed local or
     foreign schedules to view calculated totals and currency-aware rankings, then
-    download the detailed `Price_Schedules.xlsx` workbook.
+    download the detailed `Price_Schedules_<TenderNo>.xlsx` workbook. The workbook
+    includes one tab per company containing the extracted local and/or foreign
+    schedule details from the input document.
 
     Bidder name
     -----------

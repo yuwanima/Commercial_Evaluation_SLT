@@ -42,6 +42,12 @@ WORK = Path(tempfile.gettempdir()) / "store"
 WORK.mkdir(exist_ok=True)
 FILES = {"gcc": "GCC_Compliance_Comparison.xlsx", "scc": "SCC_Compliance_Comparison.xlsx",
          "eval": "Technical_Evaluation_Compliance.xlsx", "price": "Price_Schedules.xlsx"}
+OUTPUT_PREFIXES = {
+    "gcc": "GCC_Compliance_Comparison",
+    "scc": "SCC_Compliance_Comparison",
+    "eval": "Technical_Evaluation_Compliance",
+    "price": "Price_Schedules",
+}
 
 @app.get("/")
 def index():
@@ -89,7 +95,9 @@ def process():
             return jsonify(error="None of the evaluation reports could be read.", problems=problems), 422
         out = WORK / job / "out"
         out.mkdir(parents=True, exist_ok=True)
-        build_eval_workbook(evals, out / FILES["eval"])
+        tenders = [ev["meta"].get("Tender No.", "") for _, ev in evals]
+        eval_path = out / f"Technical_Evaluation_Compliance{consolidate._tender_suffix(tenders)}.xlsx"
+        build_eval_workbook(evals, eval_path)
         return jsonify(job=job, eval=True, evals=[eval_to_json(label, parsed) for label, parsed in evals],
                        problems=problems + [f"{x}: unsupported file type, skipped" for x in bad])
 
@@ -156,10 +164,13 @@ def process():
 def download(job, kind):
     if kind not in FILES or not re.fullmatch(r"[0-9a-f]{12}", job):
         abort(404)
-    p = WORK / job / "out" / FILES[kind]
+    output_dir = WORK / job / "out"
+    output_files = list(output_dir.glob(f"{OUTPUT_PREFIXES[kind]}*.xlsx"))
+    if len(output_files) == 1:
+        p = output_files[0]
     if not p.exists():
         abort(404)
-    return send_file(p, as_attachment=True, download_name=FILES[kind])
+    return send_file(p, as_attachment=True, download_name=p.name)
 
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=5000, debug=False)
