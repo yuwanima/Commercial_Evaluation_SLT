@@ -363,7 +363,7 @@ def build_eval_workbook(evals, out):
             # Partial compliance is accepted; only non-compliance or a disqualified overall
             # result excludes the bidder from commercial evaluation.
             elig_row = r
-            #C.body(ws, r, 1, "Eligible for Commercial Evaluation", bold=True)
+            C.body(ws, r, 1, "Eligible for Commercial Evaluation", bold=True)
             for j in range(n):
                 col = L(2 + j)
                 x = C.body(ws, r, 2 + j,
@@ -371,7 +371,7 @@ def build_eval_workbook(evals, out):
                            bold=True, center=True)
             _cf_eligible(ws, f"B{elig_row}:{L(1+n)}{elig_row}", f"B{elig_row}")
             r += 1
-            #C.body(ws, r, 1, "Flag: report's stated result conflicts with compliance", bold=False)
+            C.body(ws, r, 1, "Flag: report's stated result conflicts with compliance", bold=False)
             for j in range(n):
                 col = L(2 + j)
                 x = C.body(ws, r, 2 + j,

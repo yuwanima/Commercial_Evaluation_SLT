@@ -573,6 +573,15 @@ def collect(inputs, tmp, problems):
             items.append((bname, rp, f))
     return items
 
+def _tender_suffix(tenders):
+    safe = [
+        re.sub(r'[\\/:*?"<>|]+', "-", str(tender).strip())
+        for tender in tenders
+        if str(tender).strip()
+    ]
+    return f"_{'-'.join(OrderedDict.fromkeys(safe))}" if safe else ""
+
+
 def run(inputs, out, mode=None):
     """Process bidder files; returns dict(gcc=Path|None, scc=Path|None, bidders=[...], problems=[...]).
     mode: None = everything, "bids" = GCC/SCC only, "eval" = technical / sole-source evaluation reports only."""
@@ -582,6 +591,7 @@ def run(inputs, out, mode=None):
     gcc_groups, scc_groups = OrderedDict(), OrderedDict()
     seen = defaultdict(int)
     res = dict(gcc=None, scc=None, gcc_bidders=[], scc_bidders=[], document_summaries=[],
+               tenders=[],
                problems=[], eval=None, evals=[])
     evals = []
     for bname, f, orig in collect(inputs, tmp, res["problems"]):
@@ -623,21 +633,30 @@ def run(inputs, out, mode=None):
         else:
             key = (data["cat"],) if data["cat"] else (None, data["title"])
             scc_groups.setdefault(key, []).append(dict(name=bname, path=str(orig), data=data))
-        res["document_summaries"].append(document_summary(f, bname, kind))
+        summary = document_summary(f, bname, kind)
+        res["document_summaries"].append(summary)
+        tender = next((point.split(":", 1)[1].strip() for point in summary["points"]
+                       if point.lower().startswith("tender number:")), "")
+        if tender and tender != "Not found" and tender not in res["tenders"]:
+            res["tenders"].append(tender)
     for g in (gcc_groups, scc_groups):                    # same bidder order in every sheet, whatever order files arrived in
         for lst in g.values():
             lst.sort(key=lambda b: b["name"].lower())
     if gcc_groups:
-        res["gcc"] = out / "GCC_Compliance_Comparison.xlsx"
+        res["gcc"] = out / f"GCC_Compliance_Comparison{_tender_suffix(res['tenders'])}.xlsx"
         build_gcc(gcc_groups, res["gcc"])
         res["gcc_bidders"] = [b["name"] for v in gcc_groups.values() for b in v]
     if scc_groups:
-        res["scc"] = out / "SCC_Compliance_Comparison.xlsx"
+        res["scc"] = out / f"SCC_Compliance_Comparison{_tender_suffix(res['tenders'])}.xlsx"
         build_scc(scc_groups, res["scc"], template_scc_text())
         res["scc_bidders"] = [b["name"] for v in scc_groups.values() for b in v]
     if evals:
         from Technical import evalreport
-        res["eval"] = out / "Technical_Evaluation_Compliance.xlsx"
+        for _, ev in evals:
+            tender = ev["meta"].get("Tender No.", "")
+            if tender and tender not in res["tenders"]:
+                res["tenders"].append(tender)
+        res["eval"] = out / f"Technical_Evaluation_Compliance{_tender_suffix(res['tenders'])}.xlsx"
         evalreport.build_eval_workbook(evals, res["eval"])
         res["evals"] = [evalreport.eval_to_json(lbl, ev) for lbl, ev in evals]
     return res

@@ -122,6 +122,7 @@ function allBox(j,probs){
 }
 
 function evBox(j){return (ev,idx)=>{
+  const tender=ev.meta&&ev.meta['Tender No.']?String(ev.meta['Tender No.']):'Not stated';
   const metaRows=Object.entries(ev.meta||{}).filter(([,value])=>String(value||'').trim()).map(([key,value])=>`<div class="detail"><b>${esc(key)}</b><span>${esc(value)}</span></div>`).join('');
   const bidDetails=ev.bids&&Array.isArray(ev.bids.headers)&&Array.isArray(ev.bids.rows)?`<h4>Details of Bidders</h4><div class="bidder-details-grid">${ev.bids.rows.map(row=>{
     const bidder=row[0]||'Unnamed bidder';
@@ -141,10 +142,9 @@ function evBox(j){return (ev,idx)=>{
   const mats=ev.matrices.map(m=>`<div class="tw"><table class="mx"><thead><tr>${m.headers.map(x=>`<th>${esc(x)}</th>`).join('')}</tr></thead><tbody>`+
     m.rows.map(r=>`<tr><td>${esc(r.area)}</td>${r.cells.map(c=>`<td class="${c.c}">${esc(c.t)}</td>`).join('')}</tr>`).join('')+
     (m.overall?`<tr class="ov"><td>Overall result (as stated in report)</td>${m.overall.map(c=>`<td class="${c.c}">${esc(c.t)}</td>`).join('')}</tr>`:'')+
-    (m.eligible?`<tr class="ov"><td>Eligible for Commercial Evaluation</td>${m.eligible.map(e=>`<td class="${e?'ok':'bad'}">${e?'Yes — proceed':'No — excluded'}</td>`).join('')}</tr>`:'')+
     `</tbody></table></div>`).join('<br>');
   return `<div class="evalbox"><h3>${ev.type==='SSET'?'Sole Source Evaluation':'Technical Evaluation'} — compliance by company</h3><div class="meta">File: ${esc(ev.label)}</div><div class="report-details"><h4>Report details</h4>${metaRows||'<div class="meta">No additional report details were detected.</div>'}</div><div class="recommendations">${bidDetails||'<h4>Details of Bidders</h4><div class="meta">No bidder details were detected.</div>'}</div>${mats}${recommendationTable}${reasons}
-    ${idx===0?`<a class="xl" href="/api/download/${j.job}/eval">⬇ Download Excel (editable)</a>`:''}</div>`}}
+    ${idx===0?`<a class="xl" href="/api/download/${j.job}/eval">⬇ Download Excel (Tender No: ${esc(tender)})</a>`:''}</div>`}}
 function priceBox(j,probs){
   const rows=(Array.isArray(j.rows)?j.rows:[]).slice().sort((a,b)=>{
     return String(a.bidder||'').localeCompare(String(b.bidder||''));
