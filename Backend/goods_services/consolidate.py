@@ -1,5 +1,5 @@
 
-import argparse, re, sys, tempfile, zipfile
+import argparse, io, re, sys, tempfile, zipfile
 from collections import OrderedDict, defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -87,6 +87,141 @@ def derive_bidder_name(path, root):
     stem = re.sub(r"\s+", " ", stem).strip(" -_")
     return stem or path.stem
 
+
+_OFFICIAL_FRANK_LABEL = re.compile(
+    r"(?i)\bofficial\s+(?:"
+    r"frank\s*(?:(?:/|or)\s*(?:stamp|seal))?"
+    r"|stamp|seal"
+    r")\b|\bcompany\s+stamp\b"
+)
+_GENERIC_OFFICIAL_FRANK_VALUES = {
+    "", "n/a", "na", "nil", "none", "-", "—", "not applicable",
+    "official frank", "official stamp", "official seal", "note", "date",
+    "yes", "no", "complied", "updated details", "details required",
+}
+
+
+def extract_official_frank_name(text, fallback):
+    """Return the company written in the document's official frank or stamp field."""
+    lines = [clean(line) for line in text.splitlines()]
+    for index, line in enumerate(lines):
+        match = _OFFICIAL_FRANK_LABEL.search(line)
+        if not match:
+            continue
+        candidates = [line[match.end():], *lines[index + 1:index + 3]]
+        for candidate in candidates:
+            value = re.sub(r"\s+", " ", candidate.replace("\ufffd", " ")).strip(" \t:;,-–—")
+            value = re.sub(r"^[^0-9A-Za-z]+", "", value)
+            if re.fullmatch(r"\d+(?:[./-]\d+)*", value):
+                continue
+            if value.casefold() in _GENERIC_OFFICIAL_FRANK_VALUES:
+                continue
+            if re.match(
+                r"(?i)^(?:note|date|part\b|please\b|all\b|incomplete\b|any\b|"
+                r"compliance\s+statement|general\s+conditions|form\s+of|"
+                r"page\s+\d+|clause(?:\s+no)?\b|description\b|complied\b|"
+                r"details\s+required|updated\s+details|yes\b|no\b|s/no\b|qty\b|unit\s+price|vat\b|nbt\b|other\s+taxes|"
+                r"country\s+of\s+origin|fob\b|cif\b|explanatory\s+note|signature\b|tender\s*(?:no|number)?|"
+                r"name\s*(?:&|and)\s*signature)\b",
+                value,
+            ):
+                continue
+            if value and not _OFFICIAL_FRANK_LABEL.fullmatch(value):
+                return value
+    return fallback
+
+
+def extract_official_frank_ocr_name(ocr_text, fallback):
+    """Use OCR only for text following an OCR-detected official frank or stamp label."""
+    match = _OFFICIAL_FRANK_LABEL.search(ocr_text)
+    if not match:
+        return fallback
+    return extract_official_frank_name(
+        f"{match.group(0)}\n{ocr_text[match.end():]}",
+        fallback,
+    )
+
+
+def has_official_frank_label(text):
+    """Return whether text refers to an official frank, stamp, or seal field."""
+    return bool(_OFFICIAL_FRANK_LABEL.search(text or ""))
+
+
+def ocr_embedded_images(path):
+    """OCR embedded document images for image-only company stamps."""
+    try:
+        import pytesseract
+        from PIL import Image
+        from pypdf import PdfReader
+    except ImportError:
+        return ""
+    tesseract = Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe")
+    if tesseract.exists():
+        pytesseract.pytesseract.tesseract_cmd = str(tesseract)
+    image_data = []
+    path = Path(path)
+    if path.suffix.lower() == ".pdf":
+        reader = PdfReader(str(path))
+        image_data = [image.data for page in reader.pages for image in page.images]
+    elif path.suffix.lower() in (".docx", ".xlsx", ".xlsm"):
+        with zipfile.ZipFile(path) as archive:
+            image_data = [
+                archive.read(name)
+                for name in archive.namelist()
+                if name.startswith(("word/media/", "xl/media/"))
+            ]
+    text = []
+    for data in image_data:
+        try:
+            image = Image.open(io.BytesIO(data)).convert("RGBA")
+            background = Image.new("RGB", image.size, "white")
+            background.paste(image, mask=image.getchannel("A"))
+            value = pytesseract.image_to_string(background).strip()
+        except (OSError, ValueError, pytesseract.TesseractNotFoundError):
+            continue
+        if value:
+            text.append(value)
+    if path.suffix.lower() == ".pdf":
+        try:
+            import importlib
+            fitz = importlib.import_module("fitz")
+            pdf = fitz.open(str(path))
+            for page in pdf:
+                blocks = page.get_text("blocks")
+                for block in blocks:
+                    if not re.search(r"(?i)official\s+frank", block[4] or ""):
+                        continue
+                    x0, y0, x1, y1 = block[:4]
+                    clip = fitz.Rect(max(0, x0 - 120), max(0, y0 - 160),
+                                     min(page.rect.width, x1 + 420),
+                                     min(page.rect.height, y1 + 240))
+                    pixmap = page.get_pixmap(matrix=fitz.Matrix(3, 3), clip=clip, alpha=False)
+                    value = pytesseract.image_to_string(
+                        Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+                    ).strip()
+                    if value:
+                        text.append(value)
+            pdf.close()
+        except (ImportError, OSError, ValueError, pytesseract.TesseractNotFoundError):
+            pass
+    return "\n".join(text)
+
+
+def document_has_embedded_images(path):
+    """Return whether a document contains embedded image content."""
+    path = Path(path)
+    if path.suffix.lower() == ".pdf":
+        from pypdf import PdfReader
+        return any(page.images for page in PdfReader(str(path)).pages)
+    if path.suffix.lower() in (".docx", ".xlsx", ".xlsm"):
+        with zipfile.ZipFile(path) as archive:
+            return any(
+                name.startswith(("word/media/", "xl/media/"))
+                for name in archive.namelist()
+            )
+    return False
+
+
 def document_text(path):
     """Return searchable text from a normalized GCC workbook or SCC document."""
     if path.suffix.lower() in (".xlsx", ".xlsm"):
@@ -105,8 +240,10 @@ def document_text(path):
     parts.extend(cell.text for table in d.tables for row in table.rows for cell in row.cells)
     return "\n".join(clean_multiline(x) for x in parts if clean_multiline(x))
 
-def document_summary(path, bidder, kind):
+def document_summary(path, bidder, kind, display_name=None, extra_text="",
+                     has_embedded_images=False, name_source=None):
     text = document_text(path)
+    text = f"{text}\n{extra_text}"
     lower = text.lower()
     tender = re.search(r"(?i)\btender\s*(?:no\.?|number)\s*[:\-]?\s*([A-Za-z0-9/.\-]+)", text)
     dates = re.findall(
@@ -117,14 +254,19 @@ def document_summary(path, bidder, kind):
         flags=re.IGNORECASE,
     )
     signature = bool(re.search(r"signature\s+of\s+(?:the\s+)?tender|tenderer.?s?\s+signature|authorized\s+sign", lower))
-    signed_value = bool(re.search(r"signature.{0,80}(yes|signed|present|✓|✔)", lower, re.DOTALL))
+    signed_value = bool(
+        re.search(r"signature.{0,80}(yes|signed|present|✓|✔)", lower, re.DOTALL)
+        or (signature and has_embedded_images)
+    )
     frank = bool(re.search(r"official\s+(?:frank|stamp|seal)|official\s+seal|company\s+stamp|rubber\s+stamp", lower))
     return {
         "bidder": bidder,
-        "document": path.name,
-        "type": "GCC" if kind == "GCC" else "SCC",
+        "document": display_name or path.name,
+        "type": kind,
         "points": [
-            f"Document type: {'GCC' if kind == 'GCC' else 'SCC'}",
+            f"Document type: {kind}",
+            f"Bidder name: {bidder}",
+            f"Bidder name source: {name_source or 'document'}",
             f"Tender number: {tender.group(1) if tender else 'Not found'}",
             f"Signature section: {'Present' if signature else 'Not found'}",
             f"Signature completed: {'Found' if signed_value else 'Not found'}",
@@ -362,21 +504,26 @@ def align_clauses(bidders):
     return master
 
 # ----------------------------------------------------------------- GCC workbook
-def build_gcc(groups, out):
+def build_gcc(groups, out, document_type="GCC"):
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
     used = set()
     summary = []
     for gkey, bidders in groups.items():
         cat, code = gkey[0], gkey[1]
-        label = CATS.get(cat, "Unrecognised template")
+        label = CATS.get(cat)
+        if label is None and document_type == "GCT":
+            label = ", ".join(b["name"] for b in bidders)
+        label = label or "Unrecognised template"
         # ordered union of clauses
         clauses = align_clauses(bidders)
-        ws = wb.create_sheet(safe_sheet(f"GCC - {label}", used))
+        ws = wb.create_sheet(safe_sheet(f"{document_type} - {label}", used))
         n = len(bidders)
         last_col = 2 + 2 * n + 1
-        ws.cell(1, 1, f"GCC COMPLIANCE COMPARISON — {label}" + (f"  (Form LGLS/FCC/{code})" if code else "")).font = Font(bold=True, size=14, color=NAVY)
+        ws.cell(1, 1, f"{document_type} COMPLIANCE COMPARISON — {label}" + (f"  (Form LGLS/FCC/{code})" if code else "")).font = Font(bold=True, size=14, color=NAVY)
         ws.cell(2, 1, f"{n} bidder(s) • {len(clauses)} clauses • generated {datetime.now():%Y-%m-%d %H:%M}").font = Font(italic=True, color="595959")
+        if document_type == "GCT":
+            ws.cell(3, 1, "Document summary: GCT compliance document analyzed").font = Font(italic=True, color="595959")
         hdr = 4
         for c, t in ((1, "Clause No"), (2, "Description")):
             hcell(ws, hdr, c, t)
@@ -588,16 +735,29 @@ def run(inputs, out, mode=None):
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     tmp = tempfile.mkdtemp()
-    gcc_groups, scc_groups = OrderedDict(), OrderedDict()
+    gcc_groups, gct_groups, scc_groups = OrderedDict(), OrderedDict(), OrderedDict()
     seen = defaultdict(int)
-    res = dict(gcc=None, scc=None, gcc_bidders=[], scc_bidders=[], document_summaries=[],
+    res = dict(gcc=None, gct=None, scc=None, gcc_bidders=[], gct_bidders=[], scc_bidders=[], document_summaries=[],
                tenders=[],
                problems=[], eval=None, evals=[])
     evals = []
     for bname, f, orig in collect(inputs, tmp, res["problems"]):
+        original_bname = bname
+        try:
+            text = document_text(f)
+            ocr_text = ocr_embedded_images(orig) if has_official_frank_label(text) else ""
+            document_name = extract_official_frank_name(text, bname)
+            if document_name == bname and ocr_text:
+                document_name = extract_official_frank_ocr_name(ocr_text, bname)
+        except (OSError, ValueError):
+            ocr_text = ""
+            text = ""
+            document_name = bname
         kind = "GCC" if f.suffix.lower().startswith(".xls") else "SCC"
-        if mode == "eval" and kind == "GCC":
-            res["problems"].append(f"{orig.name}: not an evaluation report (spreadsheets belong in the GCC / SCC tab)")
+        if re.search(r"(?i)general\s+conditions\s+of\s+tender|compliance\s+statement\s+for\s+general\s+conditions\s+of\s+tender", text):
+            kind = "GCT"
+        if mode == "eval" and kind in ("GCC", "GCT"):
+            res["problems"].append(f"{orig.name}: not an evaluation report (compliance documents belong in the GCC / SCC / GCT tab)")
             continue
         if kind == "SCC":                       # a .docx may be a TET / SSET evaluation report instead of an SCC form
             try:
@@ -609,7 +769,7 @@ def run(inputs, out, mode=None):
                 if mode == "bids":
                     res["problems"].append(f"{orig.name}: this is an evaluation report - upload it in the Technical Evaluation tab")
                     continue
-                evals.append((bname if mode == "eval" else orig.stem, ev))
+                evals.append((document_name, ev))
                 continue
             except ValueError as e:
                 if mode == "eval":
@@ -618,9 +778,9 @@ def run(inputs, out, mode=None):
                 if "not an evaluation report" not in str(e):
                     res["problems"].append(f"{orig.name}: {e}")
                     continue
-        name = bname
+        bname = document_name
         try:
-            data = parse_gcc(f) if kind == "GCC" else parse_scc(f)
+            data = parse_gcc(f) if kind in ("GCC", "GCT") else parse_scc(f)
         except Exception as e:
             res["problems"].append(f"{orig.name} ({bname}): {e}")
             continue
@@ -630,22 +790,34 @@ def run(inputs, out, mode=None):
         if kind == "GCC":
             key = (data["cat"], data["code"] or "") if data["cat"] else (4, "075")   # no form code -> assume Goods (Local)
             gcc_groups.setdefault(key, []).append(dict(name=bname, path=str(orig), data=data))
+        elif kind == "GCT":
+            key = (data["cat"], data["code"] or "") if data["cat"] else ("GCT", "")
+            gct_groups.setdefault(key, []).append(dict(name=bname, path=str(orig), data=data))
         else:
             key = (data["cat"],) if data["cat"] else (None, data["title"])
             scc_groups.setdefault(key, []).append(dict(name=bname, path=str(orig), data=data))
-        summary = document_summary(f, bname, kind)
+        summary = document_summary(
+            f, bname, kind, orig.name, ocr_text,
+            document_has_embedded_images(orig),
+            "Official frank / stamp / seal" if document_name != original_bname
+            else "filename or folder fallback",
+        )
         res["document_summaries"].append(summary)
         tender = next((point.split(":", 1)[1].strip() for point in summary["points"]
                        if point.lower().startswith("tender number:")), "")
         if tender and tender != "Not found" and tender not in res["tenders"]:
             res["tenders"].append(tender)
-    for g in (gcc_groups, scc_groups):                    # same bidder order in every sheet, whatever order files arrived in
+    for g in (gcc_groups, gct_groups, scc_groups):        # same bidder order in every sheet, whatever order files arrived in
         for lst in g.values():
             lst.sort(key=lambda b: b["name"].lower())
     if gcc_groups:
         res["gcc"] = out / f"GCC_Compliance_Comparison{_tender_suffix(res['tenders'])}.xlsx"
         build_gcc(gcc_groups, res["gcc"])
         res["gcc_bidders"] = [b["name"] for v in gcc_groups.values() for b in v]
+    if gct_groups:
+        res["gct"] = out / f"GCT_Compliance_Comparison{_tender_suffix(res['tenders'])}.xlsx"
+        build_gcc(gct_groups, res["gct"], document_type="GCT")
+        res["gct_bidders"] = [b["name"] for v in gct_groups.values() for b in v]
     if scc_groups:
         res["scc"] = out / f"SCC_Compliance_Comparison{_tender_suffix(res['tenders'])}.xlsx"
         build_scc(scc_groups, res["scc"], template_scc_text())
@@ -669,6 +841,8 @@ def main():
     res = run(a.inputs, a.out)
     if res["gcc"]:
         print(f"GCC: {len(res['gcc_bidders'])} bidder(s) -> {res['gcc']}")
+    if res["gct"]:
+        print(f"GCT: {len(res['gct_bidders'])} bidder(s) -> {res['gct']}")
     if res["scc"]:
         print(f"SCC: {len(res['scc_bidders'])} bidder(s) -> {res['scc']}")
     if res["problems"]:
@@ -677,8 +851,8 @@ def main():
             print("  -", p)
     if res["eval"]:
         print(f"Evaluation reports: {len(res['evals'])} -> {res['eval']}")
-    if not res["gcc"] and not res["scc"] and not res["eval"]:
-        sys.exit("No readable GCC / SCC / evaluation files found (.xlsx .xls .docx .doc .pdf).")
+    if not res["gcc"] and not res["gct"] and not res["scc"] and not res["eval"]:
+        sys.exit("No readable GCC / GCT / SCC / evaluation files found (.xlsx .xls .docx .doc .pdf).")
 
 if __name__ == "__main__":
     main()

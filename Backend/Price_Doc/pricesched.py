@@ -11,7 +11,7 @@ Quoted total:   local   = sum( Qty x Unit Price incl. taxes )
                 foreign = sum( Total CIF/CIP Cost )   (+ Local Agent's Commission if switched on in the Excel)
 Anything the bidder left blank but that can be calculated is calculated, as an editable formula shaded amber.
 """
-import re, sys, tempfile
+import re, sys, tempfile, copy
 from collections import OrderedDict, defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -77,6 +77,80 @@ def read_grids(path):
     return grids, "\n".join(text)
 
 
+# --------------------------------------------------------------------------- bidder identification
+_OFFICIAL_FRANK_LABEL = re.compile(
+    r"(?i)\bofficial\s+(?:"
+    r"frank\s*(?:(?:/|or)\s*(?:stamp|seal))?"
+    r"|stamp|seal"
+    r")\b|\bcompany\s+stamp\b"
+)
+_GENERIC_BIDDER_VALUES = {
+    "", "n/a", "na", "nil", "none", "-", "—", "not applicable",
+    "official frank", "official stamp", "official seal", "note", "date",
+    "yes", "no", "complied", "updated details", "details required",
+}
+
+
+def _bidder_value(value):
+    """Return a usable company value, or an empty string for a field label/placeholder."""
+    value = re.sub(r"\s+", " ", _text(value)).strip(" \t:;,-–—")
+    value = re.sub(r"^[^0-9A-Za-z]+", "", value)
+    if re.fullmatch(r"\d+(?:[./-]\d+)*", value):
+        return ""
+    if value.casefold() in _GENERIC_BIDDER_VALUES:
+        return ""
+    if _OFFICIAL_FRANK_LABEL.fullmatch(value):
+        return ""
+    if re.match(
+        r"(?i)^(?:note|date|part\b|please\b|all\b|incomplete\b|any\b|"
+        r"compliance\s+statement|general\s+conditions|form\s+of|"
+        r"page\s+\d+|clause(?:\s+no)?\b|description\b|complied\b|"
+        r"details\s+required|updated\s+details|yes\b|no\b|s/no\b|qty\b|unit\s+price|vat\b|nbt\b|other\s+taxes|"
+        r"country\s+of\s+origin|fob\b|cif\b|explanatory\s+note|signature\b|tender\s*(?:no|number)?|"
+        r"name\s*(?:&|and)\s*signature)\b",
+        value,
+    ):
+        return ""
+    return value
+
+
+def extract_bidder_name(text, grids, fallback):
+    """Read the company name written next to the price form's Official Frank field."""
+    for grid in grids:
+        for row_number, row in enumerate(grid):
+            for column, cell in enumerate(row):
+                label = _text(cell)
+                match = _OFFICIAL_FRANK_LABEL.search(label)
+                if not match:
+                    continue
+                inline = _bidder_value(label[match.end():])
+                if inline:
+                    return inline
+                for candidate in row[column + 1:]:
+                    value = _bidder_value(candidate)
+                    if value:
+                        return value
+                if row_number + 1 < len(grid) and column < len(grid[row_number + 1]):
+                    value = _bidder_value(grid[row_number + 1][column])
+                    if value:
+                        return value
+
+    # PDF conversion and some Word layouts flatten the field into running text.
+    lines = [_text(line) for line in text.splitlines()]
+    for index, line in enumerate(lines):
+        match = _OFFICIAL_FRANK_LABEL.search(line)
+        if not match:
+            continue
+        inline = _bidder_value(line[match.end():])
+        if inline:
+            return inline
+        for candidate in lines[index + 1:index + 3]:
+            value = _bidder_value(candidate)
+            if value:
+                return value
+    return fallback
+
+
 # --------------------------------------------------------------------------- locating the two tables
 LOCAL_FIELDS = ["sno", "desc", "qty", "unit_excl", "vat", "sscl", "other", "unit_incl"]
 FOREIGN_FIELDS = ["sno", "desc", "qty", "origin", "fob_unit", "fob_total", "insurance", "freight", "cif", "commission"]
@@ -96,8 +170,10 @@ def _is_local_header(row):
 
 
 def _is_foreign_header(row):
-    h = _hdr_norm(row)
-    return ("fob" in h or "cif" in h) and ("freight" in h or "insurance" in h or "origin" in h or "cif" in h)
+    header = " ".join(_text(c) for c in row)
+    has_price_field = re.search(r"(?i)\b(?:fob|fca|cif|cip)\b", header)
+    has_foreign_context = re.search(r"(?i)\b(?:freight|insurance|origin|country)\b", header)
+    return bool(has_price_field and has_foreign_context)
 
 
 def _local_field(t):
@@ -222,7 +298,8 @@ def parse_price(path):
                 parts.append(dict(kind=kind, items=items, stated=stated))
             i = max(nxt, i + 1)
     m = re.search(r"(?i)tender\s*no\.?\s*[:\-]?\s*([A-Za-z0-9/\-\.]{3,})", text)
-    return dict(parts=parts, text=text, tender=m.group(1).strip(".") if m else "")
+    return dict(parts=parts, text=text, grids=grids,
+                tender=m.group(1).strip(".") if m else "")
 
 
 CURRENCY = re.compile(
@@ -305,10 +382,152 @@ def _body(ws, r, c, v, fmt=None, fill=None, bold=False, center=False):
 
 
 MONEY = "#,##0.00"
+ANNEXURE_TEMPLATE = Path(__file__).resolve().parent / "templates" / "Annexure - For ComOps Project.xlsx"
+
+
+def _annexure_value(value):
+    return value if value is not None else None
+
+
+def _annexure_rows(entries):
+    """Flatten extracted schedule items into the Annexure's evaluation rows."""
+    descriptions = OrderedDict()
+    for entry in entries:
+        for item in entry["items"]:
+            description = re.sub(r"\s+", " ", _text(item.get("desc"))).strip()
+            key = description.casefold() if description else f"row-{len(descriptions) + 1}"
+            descriptions.setdefault(key, len(descriptions) + 1)
+
+    rows = []
+    option_numbers = defaultdict(int)
+    for entry in entries:
+        for item in entry["items"]:
+            description = re.sub(r"\s+", " ", _text(item.get("desc"))).strip()
+            key = description.casefold() if description else f"row-{len(rows) + 1}"
+            option_numbers[key] += 1
+            rows.append({
+                "number": descriptions[key],
+                "option": option_numbers[key],
+                "kind": entry["kind"],
+                "bidder": entry["bidder"],
+                "description": description,
+                "qty": num(item.get("qty")),
+                "fca": None,
+                "fob": num(item.get("fob_unit")),
+                "insurance": num(item.get("insurance")),
+                "freight": num(item.get("freight")),
+                "cif": num(item.get("cif")),
+                "unit_excl": num(item.get("unit_excl")),
+                "unit_incl": num(item.get("unit_incl")),
+                "sscl": num(item.get("sscl")),
+                "vat": num(item.get("vat")),
+                "source": entry.get("source", ""),
+                "currency": entry.get("currency", ""),
+            })
+    return rows
+
+
+def _copy_annexure_row_style(ws, source_row, target_row, max_column=28):
+    if source_row == target_row:
+        return
+    ws.row_dimensions[target_row].height = ws.row_dimensions[source_row].height
+    for column in range(1, max_column + 1):
+        source = ws.cell(source_row, column)
+        target = ws.cell(target_row, column)
+        if source.has_style:
+            target._style = copy.copy(source._style)
+        if source.number_format:
+            target.number_format = source.number_format
+
+
+def _populate_annexure_sheet(ws, entries):
+    """Populate one Annexure sheet with one company's extracted prices."""
+    rows = _annexure_rows(entries)
+    first_row, last_template_row = 9, 80
+
+    for merged in list(ws.merged_cells.ranges):
+        if merged.min_row >= first_row and merged.max_row <= last_template_row:
+            ws.unmerge_cells(str(merged))
+    for row in range(first_row, last_template_row + 1):
+        for column in range(1, 29):
+            ws.cell(row, column).value = None
+
+    for index, item in enumerate(rows):
+        row = first_row + index
+        if row > last_template_row:
+            ws.insert_rows(row)
+        _copy_annexure_row_style(ws, first_row, row)
+        values = {
+            1: item["number"],
+            2: item["option"],
+            3: "Local" if item["kind"] == "local" else "Foreign",
+            4: item["bidder"],
+            5: item["description"],
+            6: item["qty"],
+            7: item["fca"],
+            8: item["fob"],
+            9: item["insurance"],
+            10: item["freight"],
+            11: item["cif"],
+            15: item["unit_excl"],
+            17: None,
+            18: item["sscl"],
+            19: item["vat"],
+            21: item["unit_incl"],
+            28: f"Source: {item['source']} ({item['currency'] or 'currency not stated'})",
+        }
+        for column, value in values.items():
+            ws.cell(row, column).value = _annexure_value(value)
+
+    # Rank foreign quotations by CIF and local quotations by tax-inclusive unit price.
+    ranked = sorted(
+        (item for item in rows if (item["cif"] if item["kind"] != "local" else item["unit_incl"]) is not None),
+        key=lambda item: item["cif"] if item["kind"] != "local" else item["unit_incl"],
+    )
+    rank_by_key = {
+        (item["number"], item["option"]): index
+        for index, item in enumerate(ranked, 1)
+    }
+    for index, item in enumerate(rows):
+        rank = rank_by_key.get((item["number"], item["option"]))
+        if rank is not None:
+            ws.cell(first_row + index, 17).value = rank
+
+    ws.freeze_panes = "G9"
+
+
+def build_annexure_workbook(entries, out, template_path=ANNEXURE_TEMPLATE):
+    """Create one Annexure-formatted evaluation tab for each company."""
+    wb = openpyxl.load_workbook(template_path)
+    template = wb[wb.sheetnames[0]]
+    used = set()
+    bidders = list(OrderedDict((entry["bidder"], None) for entry in entries))
+
+    sheets = []
+    for index, bidder in enumerate(bidders):
+        ws = template if index == 0 else wb.copy_worksheet(template)
+        ws.title = C.safe_sheet(bidder, used)
+        sheets.append((ws, bidder))
+
+    for ws, bidder in sheets:
+        _populate_annexure_sheet(
+            ws,
+            [entry for entry in entries if entry["bidder"] == bidder],
+        )
+
+    wb.calculation.calcMode = "auto"
+    wb.calculation.fullCalcOnLoad = True
+    wb.calculation.forceFullCalc = True
+    wb.save(out)
 
 
 def build_workbook(entries, out):
-    """Create one source-detail tab for each company."""
+    """Create the Annexure-formatted price evaluation workbook."""
+    if ANNEXURE_TEMPLATE.exists():
+        build_annexure_workbook(entries, out)
+        return
+
+    # Keep the prior layout as a safe fallback if the template is unavailable.
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
     used = set()
@@ -547,8 +766,12 @@ def run(inputs, out):
         if not data["parts"]:
             problems.append(f"{orig.name} ({bname}): no filled-in price schedule found (is Part A / Part B filled in?)")
             continue
+        ocr_text = C.ocr_embedded_images(orig) if C.has_official_frank_label(data["text"]) else ""
+        bidder = extract_bidder_name(data["text"], data["grids"], bname)
+        if bidder == bname and ocr_text:
+            bidder = extract_bidder_name(ocr_text, data["grids"], bname)
         for p in data["parts"]:
-            entries.append(dict(bidder=bname, kind=p["kind"], items=p["items"], stated=p["stated"],
+            entries.append(dict(bidder=bidder, kind=p["kind"], items=p["items"], stated=p["stated"],
                                 currency=detect_currency(data["text"], p["kind"]), source=orig.name, tender=data["tender"]))
     res = dict(file=None, rows=[], problems=problems, notes=[], errors=[],
                tenders=list(OrderedDict.fromkeys(

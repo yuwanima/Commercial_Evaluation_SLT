@@ -40,10 +40,12 @@ app.register_blueprint(chatbot_bp)
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024
 WORK = Path(tempfile.gettempdir()) / "store"
 WORK.mkdir(exist_ok=True)
-FILES = {"gcc": "GCC_Compliance_Comparison.xlsx", "scc": "SCC_Compliance_Comparison.xlsx",
+FILES = {"gcc": "GCC_Compliance_Comparison.xlsx", "gct": "GCT_Compliance_Comparison.xlsx",
+         "scc": "SCC_Compliance_Comparison.xlsx",
          "eval": "Technical_Evaluation_Compliance.xlsx", "price": "Price_Schedules.xlsx"}
 OUTPUT_PREFIXES = {
     "gcc": "GCC_Compliance_Comparison",
+    "gct": "GCT_Compliance_Comparison",
     "scc": "SCC_Compliance_Comparison",
     "eval": "Technical_Evaluation_Compliance",
     "price": "Price_Schedules",
@@ -136,7 +138,9 @@ def process():
                 return True
             if price_res["file"] and source in source_names and "no scc table 1 / table 2 found" in problem.casefold():
                 return True
-            if (res["gcc"] or res["scc"]) and source in source_names and "no filled-in price schedule found" in problem.casefold():
+            if (res["gcc"] or res["gct"] or res["scc"]) and source in source_names and "no filled-in price schedule found" in problem.casefold():
+                return True
+            if source in source_names and source not in price_sources and "no filled-in price schedule found" in problem.casefold():
                 return True
             return False
 
@@ -144,19 +148,21 @@ def process():
             problem for problem in res["problems"] + price_res["problems"]
             if not is_cross_parser_warning(problem)
         ] + price_res["errors"] + [f"{x}: unsupported file type, skipped" for x in bad]
-        if not (res["gcc"] or res["scc"] or res["evals"] or price_res["file"]):
+        if not (res["gcc"] or res["gct"] or res["scc"] or res["evals"] or price_res["file"]):
             return jsonify(error="None of the uploaded documents could be read.", problems=problems), 422
         return jsonify(
-            job=job, all=True, uploaded_count=len(specs), gcc=bool(res["gcc"]), scc=bool(res["scc"]),
+            job=job, all=True, uploaded_count=len(specs), gcc=bool(res["gcc"]), gct=bool(res["gct"]),
+            scc=bool(res["scc"]),
             eval=bool(res["evals"]), evals=res["evals"], price=bool(price_res["file"]),
             rows=price_res["rows"], notes=price_res["notes"],
-            gcc_bidders=res["gcc_bidders"], scc_bidders=res["scc_bidders"],
+            gcc_bidders=res["gcc_bidders"], gct_bidders=res["gct_bidders"], scc_bidders=res["scc_bidders"],
             document_summaries=res["document_summaries"], problems=problems,
         )
-    if not res["gcc"] and not res["scc"]:
+    if not res["gcc"] and not res["gct"] and not res["scc"]:
         return jsonify(error="None of the files could be read.", problems=res["problems"]), 422
-    return jsonify(job=job, gcc=bool(res["gcc"]), scc=bool(res["scc"]), eval=False, evals=[],
-                   gcc_bidders=res["gcc_bidders"], scc_bidders=res["scc_bidders"],
+    return jsonify(job=job, gcc=bool(res["gcc"]), gct=bool(res["gct"]), scc=bool(res["scc"]),
+                   eval=False, evals=[], gcc_bidders=res["gcc_bidders"],
+                   gct_bidders=res["gct_bidders"], scc_bidders=res["scc_bidders"],
                    document_summaries=res["document_summaries"],
                    problems=res["problems"] + [f"{x}: unsupported file type, skipped" for x in bad])
 
