@@ -147,6 +147,82 @@ def has_official_frank_label(text):
     return bool(_OFFICIAL_FRANK_LABEL.search(text or ""))
 
 
+# ── Header company-name extraction (PRIMARY method) ──────────────────────────
+# Matches legal-entity suffixes that reliably identify a company name line.
+_HEADER_COMPANY_SUFFIXES = re.compile(
+    r"(?i)\b(?:"
+    r"(?:pvt|private|public)\s*\.?\s*ltd|limited|incorporated|inc\b|"
+    r"corporation|corp\b|llc|llp|lp\b|plc\b|"
+    r"\(pvt\)\s*ltd|\(private\)\s*limited|\(guarantee\)\s*limited|"
+    r"company|co\b|"
+    r"associates?|group\b|holdings?|enterprises?|"
+    r"industries|industry|traders?|trading|international|services?|"
+    r"solutions?|technologies?|technology|systems?|consultants?|consulting|"
+    r"engineering|engineers?|construction|builders?|suppliers?|imports?|exports?"
+    r")\b"
+)
+
+_HEADER_SKIP = re.compile(
+    r"(?i)^(?:"
+    r"date|ref|reference|to\b|from\b|subject|attn|attention|dear|"
+    r"tender|no\.?|number|page\b|clause|description|item\b|s\.?no\.?|"
+    r"name\s*(?:&|and)\s*signature|signature|authorized|"
+    r"compliance|general\s+conditions|special\s+conditions|"
+    r"goods\b|services\b|form\b|lgls|fcc|"
+    r"bid\b|bidder|this\s+document"
+    r")\b"
+)
+
+# Number of non-empty lines from the top to treat as the document header
+_HEADER_SCAN_LINES = 20
+
+
+def extract_header_name(text, fallback):
+    """
+    PRIMARY company-name detection: scan the document HEADER (letterhead /
+    title area, first ~20 non-empty lines) for a company name.
+
+    Strategy:
+      Pass 1 - return the first header line that contains a known legal-entity
+               suffix (Ltd, Pvt Ltd, Corp, PLC, etc.).
+      Pass 2 - return the longest mostly-capitalised line in the very first 5
+               lines (letterhead almost always has the company name there).
+    Returns *fallback* when nothing suitable is found, so the caller can try
+    the Official Frank / stamp method next.
+    """
+    lines = [clean(ln) for ln in text.splitlines() if clean(ln)]
+    header_lines = lines[:_HEADER_SCAN_LINES]
+
+    # Pass 1: legal-entity suffix in the header
+    for line in header_lines:
+        if _HEADER_SKIP.match(line):
+            continue
+        if _OFFICIAL_FRANK_LABEL.search(line):
+            continue
+        if _HEADER_COMPANY_SUFFIXES.search(line):
+            # Strip leading salutation noise ("To:", "From:", "Re:" …)
+            value = re.sub(r"(?i)^(?:to|from|re|ref|attn)\s*:\s*", "", line)
+            value = value.strip(" \t:;,-")
+            if 3 < len(value) < 120:
+                return value
+
+    # Pass 2: longest mostly-capitalised line in the first 5 lines
+    for line in lines[:5]:
+        if _HEADER_SKIP.match(line):
+            continue
+        if _OFFICIAL_FRANK_LABEL.search(line):
+            continue
+        words = line.split()
+        if len(words) < 2:
+            continue
+        cap_ratio = sum(1 for w in words if w and w[0].isupper()) / len(words)
+        if cap_ratio >= 0.6 and 6 < len(line) < 100:
+            return line
+
+    return fallback
+
+
+
 def ocr_embedded_images(path):
     """OCR embedded document images for image-only company stamps."""
     try:
@@ -745,10 +821,17 @@ def run(inputs, out, mode=None):
         original_bname = bname
         try:
             text = document_text(f)
-            ocr_text = ocr_embedded_images(orig) if has_official_frank_label(text) else ""
-            document_name = extract_official_frank_name(text, bname)
-            if document_name == bname and ocr_text:
-                document_name = extract_official_frank_ocr_name(ocr_text, bname)
+            # ── Step 1: Try the document HEADER (letterhead / company title) ──
+            document_name = extract_header_name(text, bname)
+            # ── Step 2: Fallback – Official Frank / stamp field in document text ──
+            if document_name == bname:
+                document_name = extract_official_frank_name(text, bname)
+            # ── Step 3: Fallback – OCR the embedded stamp image ──
+            ocr_text = ""
+            if document_name == bname and has_official_frank_label(text):
+                ocr_text = ocr_embedded_images(orig)
+                if ocr_text:
+                    document_name = extract_official_frank_ocr_name(ocr_text, bname)
         except (OSError, ValueError):
             ocr_text = ""
             text = ""
@@ -799,7 +882,9 @@ def run(inputs, out, mode=None):
         summary = document_summary(
             f, bname, kind, orig.name, ocr_text,
             document_has_embedded_images(orig),
-            "Official frank / stamp / seal" if document_name != original_bname
+            ("Header" if extract_header_name(text, bname) != bname
+             else "Official frank / stamp / seal")
+            if document_name != original_bname
             else "filename or folder fallback",
         )
         res["document_summaries"].append(summary)
