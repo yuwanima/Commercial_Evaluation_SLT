@@ -14,16 +14,17 @@ function folderName(parts){
 
 function panel(root,mode){
   const items=[],zone=root.querySelector('.zone'),ul=root.querySelector('ul.files'),cnt=root.querySelector('.count'),out=root.querySelector('.out'),go=root.querySelector('.go'),goText=go.textContent;
-  const kindOf=n=>/\.zip$/i.test(n)?'ZIP':mode==='all'?'DOC':mode==='eval'?'EVAL':mode==='price'?'PRICE':/\.(xlsx|xlsm|xls)$/i.test(n)?'GCC':/\.pdf$/i.test(n)?(/scc/i.test(n)?'SCC':/gcc/i.test(n)?'GCC':'PDF'):'SCC';
+  const kindOf=n=>/\.zip$/i.test(n)?'ZIP':/gct/i.test(n)?'GCT':mode==='all'?'DOC':mode==='eval'?'EVAL':mode==='price'?'PRICE':/\.(xlsx|xlsm|xls)$/i.test(n)?'GCC':/\.pdf$/i.test(n)?(/scc/i.test(n)?'SCC':/gcc/i.test(n)?'GCC':'PDF'):'SCC';
   const named=it=>it.kind!=='ZIP'&&it.kind!=='EVAL';
   function render(extra){
     ul.innerHTML='';
     if(mode==='all'&&items.length){
-      const groups={Technical:[],Price:[], 'GCC/SCC':[],Other:[]};
+      const groups={Technical:[],Price:[], 'GCC/SCC':[],GCT:[],Other:[]};
       items.forEach(it=>{
         const text=`${it.path||''} ${it.file.name}`.toLowerCase();
         const group=/technical|evaluation|\btet\b|\bsset\b/.test(text)?'Technical':
           /price|schedule|financial/.test(text)?'Price':
+          /gct|general conditions of tender/.test(text)?'GCT':
           /gcc|scc|general conditions|special conditions/.test(text)?'GCC/SCC':'Other';
         groups[group].push(it);
       });
@@ -94,7 +95,7 @@ function panel(root,mode){
       const visibleProblems=(mode==='all'?(j.problems||[]).filter(p=>{
         const text=String(p).toLowerCase();
         return !((text.includes('no scc table 1 / table 2 found')&&j.price)||
-          (text.includes('no filled-in price schedule found')&&(j.gcc||j.scc)));
+          (text.includes('no filled-in price schedule found')&&(j.gcc||j.gct||j.scc||!j.price)));
       }):(j.problems||[]));
       const probs=visibleProblems.length?'<b style="color:var(--bad);font-size:14px">Some files could not be read:</b><ul class="warn">'+visibleProblems.map(p=>'<li>'+esc(p)+'</li>').join('')+'</ul>':'';
       if(!r.ok){out.innerHTML=`<div class="msg">${esc(j.error||'Something went wrong')}${j.problems?'<ul class="warn">'+j.problems.map(p=>'<li>'+esc(p)+'</li>').join('')+'</ul>':''}</div>`;return}
@@ -102,9 +103,11 @@ function panel(root,mode){
       if(mode==='eval'){out.innerHTML=(j.evals||[]).map(evBox(j)).join('')+(probs?`<div class="res">${probs}</div>`:'');return}
       if(mode==='price'){out.innerHTML=priceBox(j,probs);return}
       const dl=(k,t,b)=>`<a class="${j[k]?'':'off'}" href="/api/download/${j.job}/${k}"><b>⬇ ${t}</b><span>${j[k]?b.length+' bidder(s): '+esc(b.join(', ')):'No files uploaded'}</span></a>`;
-      const summaries=(j.document_summaries||[]).map(s=>`<div class="doc-summary"><h4>${esc(s.bidder)} — ${esc(s.document)}</h4><ul>${s.points.map(p=>`<li>${esc(p)}</li>`).join('')}</ul></div>`).join('');
+      const extracted=s=>(s.points||[]).find(p=>/^bidder name source:\s*official frank \/ stamp \/ seal$/i.test(p));
+      const summaries=(j.document_summaries||[]).map(s=>`<div class="doc-summary"><h4>${esc(s.bidder||'Unknown bidder')} — ${esc(s.type||'Document')} summary</h4><ul>${s.points.filter(p=>!/^signature section:/i.test(p)&&!/^bidder name(?: source)?:/i.test(p)).map(p=>`<li>${esc(p)}</li>`).join('')}</ul></div>`).join('');
+      const names=(j.document_summaries||[]).filter(extracted).map(s=>`<div><b>${esc(s.bidder||'Unknown')}</b><span>Official frank / stamp / seal</span></div>`).join('');
       out.innerHTML=`<div class="res"><h3>✓ Comparison ready</h3><div style="color:var(--mut);font-size:14px">Download your Excel files:</div>
-        <div class="dl">${dl('gcc','GCC_Compliance_Comparison.xlsx',j.gcc_bidders)}${dl('scc','SCC_Compliance_Comparison.xlsx',j.scc_bidders)}</div>${summaries?`<div class="doc-summaries"><h4>Document checks</h4>${summaries}</div>`:''}${probs}</div>`;
+        <div class="dl">${dl('gcc','GCC_Compliance_Comparison.xlsx',j.gcc_bidders)}${dl('gct','GCT_Compliance_Comparison.xlsx',j.gct_bidders)}${dl('scc','SCC_Compliance_Comparison.xlsx',j.scc_bidders)}</div>${names?`<div class="detected-names"><h4>Detected bidder name(s)</h4>${names}</div>`:''}${summaries?`<div class="doc-summaries"><h4>Document checks</h4>${summaries}</div>`:''}${probs}</div>`;
     }catch(e){out.innerHTML='<div class="msg">Could not reach the server: '+esc(String(e))+'</div>'}
     finally{go.disabled=false;go.textContent=goText}
   };
@@ -112,9 +115,11 @@ function panel(root,mode){
 
 function allBox(j,probs){
   const dl=(k,t,b)=>`<a class="${j[k]?'':'off'}" href="/api/download/${j.job}/${k}"><b>⬇ ${t}</b><span>${j[k]?(b||[]).length+' bidder(s): '+esc((b||[]).join(', ')):'No matching files uploaded'}</span></a>`;
-  const summaries=(j.document_summaries||[]).map(s=>`<div class="doc-summary"><h4>${esc(s.bidder)} — ${esc(s.document)}</h4><ul>${(s.points||[]).map(p=>`<li>${esc(p)}</li>`).join('')}</ul></div>`).join('');
+  const extracted=s=>(s.points||[]).find(p=>/^bidder name source:\s*official frank \/ stamp \/ seal$/i.test(p));
+  const summaries=(j.document_summaries||[]).map(s=>`<div class="doc-summary"><h4>${esc(s.bidder||'Unknown bidder')} — ${esc(s.type||'Document')} summary</h4><ul>${(s.points||[]).filter(p=>!/^signature section:/i.test(p)&&!/^bidder name(?: source)?:/i.test(p)).map(p=>`<li>${esc(p)}</li>`).join('')}</ul></div>`).join('');
+  const names=(j.document_summaries||[]).filter(extracted).map(s=>`<div><b>${esc(s.bidder||'Unknown')}</b><span>Official frank / stamp / seal</span></div>`).join('');
   const evaluations=j.evals||[], priceRows=j.rows||[];
-  const comparison=j.gcc||j.scc?`<div class="all-section"><h2>GCC / SCC Comparison</h2><div class="res"><h3>✓ Comparison ready</h3><div class="dl">${dl('gcc','GCC_Compliance_Comparison.xlsx',j.gcc_bidders)}${dl('scc','SCC_Compliance_Comparison.xlsx',j.scc_bidders)}</div>${summaries?`<details class="result-details"><summary>View document checks (${(j.document_summaries||[]).length})</summary><div class="doc-summaries">${summaries}</div></details>`:''}</div></div>`:`<div class="all-section empty-section"><h2>GCC / SCC Comparison</h2><p>No GCC or SCC documents detected.</p></div>`;
+  const comparison=j.gcc||j.gct||j.scc?`<div class="all-section"><h2>GCC / GCT / SCC Comparison</h2><div class="res"><h3>✓ Comparison ready</h3><div class="dl">${dl('gcc','GCC_Compliance_Comparison.xlsx',j.gcc_bidders)}${dl('gct','GCT_Compliance_Comparison.xlsx',j.gct_bidders)}${dl('scc','SCC_Compliance_Comparison.xlsx',j.scc_bidders)}</div>${names?`<div class="detected-names"><h4>Detected bidder name(s)</h4>${names}</div>`:''}${summaries?`<details class="result-details"${j.gct?' open':''}><summary>View document checks (${(j.document_summaries||[]).length})</summary><div class="doc-summaries">${summaries}</div></details>`:''}</div></div>`:`<div class="all-section empty-section"><h2>GCC / GCT / SCC Comparison</h2><p>No GCC, GCT, or SCC documents detected.</p></div>`;
   const evaluationDetails=evaluations.map((ev,i)=>`<details class="result-details"><summary>${esc(ev.label||`Technical report ${i+1}`)}</summary>${evBox(j)(ev,i)}</details>`).join('');
   const evaluationSection=evaluations.length?`<div class="all-section"><h2>Technical Evaluation</h2>${evaluationDetails}</div>`:`<div class="all-section empty-section"><h2>Technical Evaluation</h2><p>No technical evaluation reports detected.</p></div>`;
   const priceSection=j.price?`<div class="all-section"><h2>Price Schedule</h2><details class="result-details" open><summary>View all price results (${priceRows.length})</summary>${priceBox(j,'')}</details></div>`:`<div class="all-section empty-section"><h2>Price Schedule</h2><p>No price schedules detected.</p></div>`;

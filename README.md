@@ -30,8 +30,9 @@
     The web front-end also has a **Price Schedule** tab. Upload completed local or
     foreign schedules to view calculated totals and currency-aware rankings, then
     download the detailed `Price_Schedules_<TenderNo>.xlsx` workbook. The workbook
-    includes one tab per company containing the extracted local and/or foreign
-    schedule details from the input document.
+    uses the Annexure 01 price-evaluation layout, with one separately populated
+    worksheet per company. Each tab contains the bidder, item, quantity, price,
+    tax, ranking, and source columns from that company's input document.
 
     Bidder name
     -----------
