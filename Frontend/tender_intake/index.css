@@ -237,16 +237,6 @@
     }
 
   .all-results{display:grid;gap:18px;margin-top:20px}
-  .detected-names{
-    margin-top:14px;
-    padding:12px 14px;
-    border:1px solid var(--line);
-    border-radius:9px;
-    background:var(--bg)
-    }
-  .detected-names h4{margin:0 0 8px;color:var(--navy)}
-  .detected-names div{display:flex;gap:10px;justify-content:space-between;padding:5px 0}
-  .detected-names span{color:var(--mut);font-size:13px}
   .upload-summary{
     padding:16px 18px;
     background:var(--card);

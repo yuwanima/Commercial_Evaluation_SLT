@@ -186,8 +186,8 @@ def _local_field(t):
         return "qty"
     if "vat" in t:
         return "vat"
-    if "sscl" in t:
-        return "sscl"
+    if "sscl" in t or "nbt" in t:
+        return "sscl"                    # the NBT column of the printed form is the SSCL column of the Annexure
     if "other" in t:
         return "other"
     if "price" in t:
@@ -297,9 +297,27 @@ def parse_price(path):
             if items:
                 parts.append(dict(kind=kind, items=items, stated=stated))
             i = max(nxt, i + 1)
-    m = re.search(r"(?i)tender\s*no\.?\s*[:\-]?\s*([A-Za-z0-9/\-\.]{3,})", text)
+    # Match specific tender number like "Tender No: XYZ/123" or "Tender Ref: ABC/456"
+    m = re.search(r"(?i)\btender\s*(?:ref\.?|reference)?\s*(?:no\.?|number)\s*[:\-]?\s*([A-Za-z0-9/\-\.]{3,})", text)
+    if not m:
+        m = re.search(r"(?i)\btender\s*[:\-]\s*([A-Za-z0-9/\-\.]{3,})", text)
+    tender_no = m.group(1).strip(".") if m else ""
+    
+    # Extract tender for purchasing / description
+    m_purchasing = re.search(
+        r"(?i)\b(?:tender\s+for\s+(?:the\s+)?purchasing(?:\s+of)?|tender\s+for\s+(?:the\s+)?supply(?:\s+of)?|"
+        r"tender\s+for\s+(?:the\s+)?procurement(?:\s+of)?|purchasing\s+of|purchase\s+of|procurement\s+of)\s*[:\-]?\s*([^\n\r]+)",
+        text,
+    )
+    purchasing = ""
+    if m_purchasing:
+        val = m_purchasing.group(1).strip(" .:;-\t")
+        val = re.sub(r"(?i)\s*\(?\s*tender\s*no.*$", "", val).strip(" .:;-\t")
+        if not re.match(r"^[.…\s]+$", val):
+            purchasing = val
+
     return dict(parts=parts, text=text, grids=grids,
-                tender=m.group(1).strip(".") if m else "")
+                tender=tender_no, purchasing=purchasing)
 
 
 CURRENCY = re.compile(
@@ -389,6 +407,20 @@ def _annexure_value(value):
     return value if value is not None else None
 
 
+def _tax_amounts(base, sscl_rate, vat_rate):
+    """Turn the bidder's SSCL / VAT percentages into amounts of money (LKR).
+
+    Both levies are charged on the quoted price itself, so
+        SSCL amount = price x SSCL%      VAT amount = price x VAT%
+    A rate quoted without a price (or a price without that rate) stays blank.
+    """
+    if base is None:
+        return None, None
+    sscl = base * sscl_rate / 100 if sscl_rate is not None else None
+    vat = base * vat_rate / 100 if vat_rate is not None else None
+    return sscl, vat
+
+
 def _annexure_rows(entries):
     """Flatten extracted schedule items into the Annexure's evaluation rows."""
     descriptions = OrderedDict()
@@ -405,6 +437,16 @@ def _annexure_rows(entries):
             description = re.sub(r"\s+", " ", _text(item.get("desc"))).strip()
             key = description.casefold() if description else f"row-{len(rows) + 1}"
             option_numbers[key] += 1
+            unit_excl = num(item.get("unit_excl"))
+            sscl_amount, vat_amount = _tax_amounts(
+                unit_excl, num(item.get("sscl")), num(item.get("vat"))
+            )
+            if unit_excl is None or (sscl_amount is None and vat_amount is None):
+                # No tax breakdown on the form: the quoted tax-inclusive price stands on its own.
+                unit_with_sscl, unit_with_taxes = None, num(item.get("unit_incl"))
+            else:
+                unit_with_sscl = unit_excl + (sscl_amount or 0)     # T: with SSCL, without VAT
+                unit_with_taxes = unit_with_sscl + (vat_amount or 0)  # U: with SSCL & VAT
             rows.append({
                 "number": descriptions[key],
                 "option": option_numbers[key],
@@ -417,10 +459,11 @@ def _annexure_rows(entries):
                 "insurance": num(item.get("insurance")),
                 "freight": num(item.get("freight")),
                 "cif": num(item.get("cif")),
-                "unit_excl": num(item.get("unit_excl")),
-                "unit_incl": num(item.get("unit_incl")),
-                "sscl": num(item.get("sscl")),
-                "vat": num(item.get("vat")),
+                "unit_excl": unit_excl,
+                "unit_with_sscl": unit_with_sscl,
+                "unit_incl": unit_with_taxes,
+                "sscl": sscl_amount,
+                "vat": vat_amount,
                 "source": entry.get("source", ""),
                 "currency": entry.get("currency", ""),
             })
@@ -440,11 +483,94 @@ def _copy_annexure_row_style(ws, source_row, target_row, max_column=28):
             target.number_format = source.number_format
 
 
-def _populate_annexure_sheet(ws, entries):
+# Optimized column widths for the Annexure price schedule table (for clear viewing of text and large amounts)
+ANNEXURE_COLUMN_WIDTHS = {
+    1: 6,       # A: No.
+    2: 5,       # B: #
+    3: 15,      # C: Option
+    4: 28,      # D: Bidder / Supplier
+    5: 35,      # E: Model / Brand (Description)
+    6: 14,      # F: Required Qty
+    7: 18,      # G: FCA Unit Price (USD)
+    8: 18,      # H: FOB Unit Price (USD)
+    9: 18,      # I: Total Insurance (USD)
+    10: 18,     # J: Total Freight (USD)
+    11: 20,     # K: CIP/ CIF Unit Price (USD)
+    12: 14,     # L: PAL (10%) (USD)
+    13: 18,     # M: Import License (0.004%) (USD)
+    14: 15,     # N: TRC Charge (USD)
+    15: 22,     # O: Unit Price (With Taxes) (Without SSCL & VAT) (USD)
+    16: 18,     # P: (in LKR)
+    17: 8,      # Q: Rank
+    18: 18,     # R: SSCL (LKR)
+    19: 18,     # S: VAT (18%) (LKR)
+    20: 24,     # T: Unit Price in LKR (With SSCL without VAT)
+    21: 24,     # U: Unit Price in LKR (With SSCL & VAT)
+    22: 18,     # V: Previous Purchased Tender No
+    23: 18,     # W: Price (CIF) (USD)
+    24: 18,     # X: % of Variation (CIF)
+    25: 18,     # Y: Previous Purchased Tender No
+    26: 18,     # Z: Price (CIF) (USD)
+    27: 18,     # AA: % of Variation (CIF)
+    28: 36,     # AB: Remarks
+}
+
+AMOUNT_COLUMNS = {7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 23, 26}
+
+
+def _populate_annexure_sheet(ws, entries, tender="", purchasing=""):
     """Populate one Annexure sheet with one company's extracted prices."""
     rows = _annexure_rows(entries)
     first_row, last_template_row = 9, 80
 
+    # 1. Update Header with Tender No and Purchasing Details
+    tender_no = tender or next((e.get("tender") for e in entries if e.get("tender")), "")
+    purchasing_desc = purchasing or next((e.get("purchasing") for e in entries if e.get("purchasing")), "")
+
+    header_parts = []
+    if purchasing_desc:
+        header_parts.append(f"Tender for Purchasing: {purchasing_desc}")
+    else:
+        header_parts.append("Tender for Purchasing")
+    if tender_no:
+        header_parts.append(f"(Tender No: {tender_no})")
+    
+    header_text = " ".join(header_parts)
+    ws["B2"].value = header_text
+    ws.row_dimensions[1].height = 24
+    ws.row_dimensions[2].height = 24
+    for r in [1, 2]:
+        for c in range(2, 29):
+            cell = ws.cell(r, c)
+            cell.font = Font(
+                name="Arial Narrow",
+                size=12 if r == 1 else 11,
+                bold=True,
+                color="1F3864",
+            )
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    # 2. Adjust Header Rows (7 and 8) font size and height
+    ws.row_dimensions[7].height = 42
+    ws.row_dimensions[8].height = 36
+    for r in [7, 8]:
+        for c in range(1, 29):
+            cell = ws.cell(r, c)
+            if cell.font:
+                cell.font = Font(
+                    name=cell.font.name or "Arial Narrow",
+                    size=max(cell.font.size or 9.0, 10.0),
+                    bold=True,
+                    color=cell.font.color,
+                )
+            if cell.alignment:
+                cell.alignment = Alignment(
+                    horizontal=cell.alignment.horizontal or "center",
+                    vertical="center",
+                    wrap_text=True,
+                )
+
+    # 3. Clear existing template rows
     for merged in list(ws.merged_cells.ranges):
         if merged.min_row >= first_row and merged.max_row <= last_template_row:
             ws.unmerge_cells(str(merged))
@@ -452,11 +578,16 @@ def _populate_annexure_sheet(ws, entries):
         for column in range(1, 29):
             ws.cell(row, column).value = None
 
+    # 4. Populate data rows
     for index, item in enumerate(rows):
         row = first_row + index
         if row > last_template_row:
             ws.insert_rows(row)
         _copy_annexure_row_style(ws, first_row, row)
+        ws.row_dimensions[row].height = 30
+        # "Unit Price (With Taxes) (Without SSCL & VAT)" is split into a USD column (O)
+        # and an LKR column (P): an LKR quotation must not be written on the USD side.
+        price_column = 16 if item["currency"].upper() == "LKR" else 15
         values = {
             1: item["number"],
             2: item["option"],
@@ -469,15 +600,37 @@ def _populate_annexure_sheet(ws, entries):
             9: item["insurance"],
             10: item["freight"],
             11: item["cif"],
-            15: item["unit_excl"],
+            price_column: item["unit_excl"],
             17: None,
             18: item["sscl"],
             19: item["vat"],
+            20: item["unit_with_sscl"],
             21: item["unit_incl"],
             28: f"Source: {item['source']} ({item['currency'] or 'currency not stated'})",
         }
         for column, value in values.items():
-            ws.cell(row, column).value = _annexure_value(value)
+            cell = ws.cell(row, column)
+            cell.value = _annexure_value(value)
+            
+            # Ensure font size is clear and readable (at least 10pt)
+            if cell.font:
+                cell.font = Font(
+                    name=cell.font.name or "Arial Narrow",
+                    size=max(cell.font.size or 9.0, 10.0),
+                    bold=cell.font.bold,
+                    color=cell.font.color,
+                )
+            
+            # Format amount columns so numbers are never cut off or crowded
+            if column in AMOUNT_COLUMNS:
+                if value is not None:
+                    if not cell.number_format or cell.number_format == "General":
+                        cell.number_format = "#,##0.00"
+                    cell.alignment = Alignment(horizontal="right", vertical="center")
+            elif column in (4, 5, 28):
+                cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+            else:
+                cell.alignment = Alignment(horizontal="center", vertical="center")
 
     # Rank foreign quotations by CIF and local quotations by tax-inclusive unit price.
     ranked = sorted(
@@ -491,12 +644,18 @@ def _populate_annexure_sheet(ws, entries):
     for index, item in enumerate(rows):
         rank = rank_by_key.get((item["number"], item["option"]))
         if rank is not None:
-            ws.cell(first_row + index, 17).value = rank
+            cell = ws.cell(first_row + index, 17)
+            cell.value = rank
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    # 5. Apply spacious column widths
+    for col_idx, width in ANNEXURE_COLUMN_WIDTHS.items():
+        ws.column_dimensions[L(col_idx)].width = width
 
     ws.freeze_panes = "G9"
 
 
-def build_annexure_workbook(entries, out, template_path=ANNEXURE_TEMPLATE):
+def build_annexure_workbook(entries, out, template_path=ANNEXURE_TEMPLATE, tender="", purchasing=""):
     """Create one Annexure-formatted evaluation tab for each company."""
     wb = openpyxl.load_workbook(template_path)
     template = wb[wb.sheetnames[0]]
@@ -513,6 +672,8 @@ def build_annexure_workbook(entries, out, template_path=ANNEXURE_TEMPLATE):
         _populate_annexure_sheet(
             ws,
             [entry for entry in entries if entry["bidder"] == bidder],
+            tender=tender,
+            purchasing=purchasing,
         )
 
     wb.calculation.calcMode = "auto"
@@ -521,10 +682,10 @@ def build_annexure_workbook(entries, out, template_path=ANNEXURE_TEMPLATE):
     wb.save(out)
 
 
-def build_workbook(entries, out):
+def build_workbook(entries, out, tender="", purchasing=""):
     """Create the Annexure-formatted price evaluation workbook."""
     if ANNEXURE_TEMPLATE.exists():
-        build_annexure_workbook(entries, out)
+        build_annexure_workbook(entries, out, tender=tender, purchasing=purchasing)
         return
 
     # Keep the prior layout as a safe fallback if the template is unavailable.
@@ -772,14 +933,20 @@ def run(inputs, out):
             bidder = extract_bidder_name(ocr_text, data["grids"], bname)
         for p in data["parts"]:
             entries.append(dict(bidder=bidder, kind=p["kind"], items=p["items"], stated=p["stated"],
-                                currency=detect_currency(data["text"], p["kind"]), source=orig.name, tender=data["tender"]))
+                                currency=detect_currency(data["text"], p["kind"]), source=orig.name,
+                                tender=data["tender"], purchasing=data.get("purchasing", "")))
     res = dict(file=None, rows=[], problems=problems, notes=[], errors=[],
                tenders=list(OrderedDict.fromkeys(
                    e["tender"] for e in entries if e.get("tender")
+               )),
+               purchasings=list(OrderedDict.fromkeys(
+                   e["purchasing"] for e in entries if e.get("purchasing")
                )))
     if entries:
         res["file"] = out / _output_filename(entries)
-        build_workbook(entries, res["file"])
+        overall_tender = ", ".join(res["tenders"]) if res["tenders"] else ""
+        overall_purchasing = " / ".join(res["purchasings"]) if res["purchasings"] else ""
+        build_workbook(entries, res["file"], tender=overall_tender, purchasing=overall_purchasing)
         rows = OrderedDict()
         for e in sorted(entries, key=lambda x: (x["bidder"].lower(), x["kind"])):
             total, notes = part_total(e["kind"], e["items"])

@@ -176,6 +176,54 @@ _HEADER_SKIP = re.compile(
 # Number of non-empty lines from the top to treat as the document header
 _HEADER_SCAN_LINES = 20
 
+# A form field written as "<label>: <value>".  GCC / SCC forms carry several of
+# them, and only the bidder's own fields name the company: "Name of Project: Aa"
+# belongs to the project, "Name of Bidder: Acme Power (Pvt) Ltd" to the bidder.
+_LABELLED_FIELD = re.compile(
+    r"^\s*(?P<label>[A-Za-z][A-Za-z /&().'\-]{1,45}?)\s*:\s*(?P<value>\S.*)$"
+)
+_BIDDER_LABEL = re.compile(
+    r"(?i)\b(?:bidder|tenderer|supplier|vendor|contractor|company|firm|applicant|consultant)\b"
+)
+_OTHER_FIELD_LABEL = re.compile(
+    r"(?i)^(?:the\s+)?(?:name\s+of\s+(?:the\s+)?)?"
+    r"(?:project|contract|package|lot|tender|bid|quotation|offer|work|works|assignment|"
+    r"purchase|procurement|subject|reference|ref|date|page|clause|item|specification|scope|title|"
+    r"address|tel|telephone|fax|e-?mail|mobile|amount|value|quantity|qty|currency|price|"
+    r"brand|model|origin|country|no|number|po|p\.o)\b"
+)
+# Section / title wording that is never a company name (only used in header pass 2)
+_HEADER_TITLE = re.compile(
+    r"(?i)^(?:the\s+)?(?:project|tender|bid|quotation|offer|supply|supplies|installation|"
+    r"commissioning|delivery|scope|works?|schedule|bill\s+of|purchase|procurement|"
+    r"gcc|gct|scc|compliance|general\s+conditions|special\s+conditions)\b"
+)
+
+
+def _usable_name(value):
+    value = re.sub(r"\s+", " ", str(value).replace("\ufffd", " ")).strip(" \t:;,-–—")
+    value = re.sub(r"^[^0-9A-Za-z]+", "", value)
+    if not 3 < len(value) < 120:
+        return ""
+    return "" if value.casefold() in _GENERIC_OFFICIAL_FRANK_VALUES else value
+
+
+def _labelled_name(line):
+    """Company name held in a "<field label>: <value>" line.
+
+    -> the company name when the label belongs to the bidder, "" when the line is
+    a different form field, None when the line is not a labelled field at all.
+    """
+    match = _LABELLED_FIELD.match(line)
+    if not match:
+        return None
+    label = match.group("label").strip()
+    if _BIDDER_LABEL.search(label):
+        return _usable_name(match.group("value"))
+    if _OTHER_FIELD_LABEL.match(label):
+        return ""
+    return None
+
 
 def extract_header_name(text, fallback):
     """
@@ -183,8 +231,9 @@ def extract_header_name(text, fallback):
     title area, first ~20 non-empty lines) for a company name.
 
     Strategy:
-      Pass 1 - return the first header line that contains a known legal-entity
-               suffix (Ltd, Pvt Ltd, Corp, PLC, etc.).
+      Pass 1 - return the value of a bidder field ("Name of Bidder: …"), else the
+               first header line that contains a known legal-entity suffix
+               (Ltd, Pvt Ltd, Corp, PLC, etc.).
       Pass 2 - return the longest mostly-capitalised line in the very first 5
                lines (letterhead almost always has the company name there).
     Returns *fallback* when nothing suitable is found, so the caller can try
@@ -193,8 +242,13 @@ def extract_header_name(text, fallback):
     lines = [clean(ln) for ln in text.splitlines() if clean(ln)]
     header_lines = lines[:_HEADER_SCAN_LINES]
 
-    # Pass 1: legal-entity suffix in the header
+    # Pass 1: bidder field or legal-entity suffix in the header
     for line in header_lines:
+        labelled = _labelled_name(line)
+        if labelled is not None:
+            if labelled:
+                return labelled
+            continue                       # another form field ("Name of Project: …"), never a name
         if _HEADER_SKIP.match(line):
             continue
         if _OFFICIAL_FRANK_LABEL.search(line):
@@ -208,7 +262,9 @@ def extract_header_name(text, fallback):
 
     # Pass 2: longest mostly-capitalised line in the first 5 lines
     for line in lines[:5]:
-        if _HEADER_SKIP.match(line):
+        if _labelled_name(line) is not None:
+            continue                       # labelled fields are handled in pass 1
+        if _HEADER_SKIP.match(line) or _HEADER_TITLE.match(line):
             continue
         if _OFFICIAL_FRANK_LABEL.search(line):
             continue
@@ -818,20 +874,25 @@ def run(inputs, out, mode=None):
                problems=[], eval=None, evals=[])
     evals = []
     for bname, f, orig in collect(inputs, tmp, res["problems"]):
-        original_bname = bname
+        name_source = "filename or folder fallback"
         try:
             text = document_text(f)
             # ── Step 1: Try the document HEADER (letterhead / company title) ──
             document_name = extract_header_name(text, bname)
+            name_source = "Header"
             # ── Step 2: Fallback – Official Frank / stamp field in document text ──
             if document_name == bname:
                 document_name = extract_official_frank_name(text, bname)
+                name_source = "Official frank / stamp / seal"
             # ── Step 3: Fallback – OCR the embedded stamp image ──
             ocr_text = ""
             if document_name == bname and has_official_frank_label(text):
                 ocr_text = ocr_embedded_images(orig)
                 if ocr_text:
                     document_name = extract_official_frank_ocr_name(ocr_text, bname)
+                    name_source = "Official frank / stamp / seal"
+            if document_name == bname:            # nothing in the document names the bidder
+                name_source = "filename or folder fallback"
         except (OSError, ValueError):
             ocr_text = ""
             text = ""
@@ -882,10 +943,7 @@ def run(inputs, out, mode=None):
         summary = document_summary(
             f, bname, kind, orig.name, ocr_text,
             document_has_embedded_images(orig),
-            ("Header" if extract_header_name(text, bname) != bname
-             else "Official frank / stamp / seal")
-            if document_name != original_bname
-            else "filename or folder fallback",
+            name_source,
         )
         res["document_summaries"].append(summary)
         tender = next((point.split(":", 1)[1].strip() for point in summary["points"]
