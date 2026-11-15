@@ -1,5 +1,5 @@
 
-import re, shutil, sys, tempfile, uuid
+import re, shutil, sys, tempfile, time, uuid
 from pathlib import Path
 import os
 
@@ -12,6 +12,7 @@ if str(BACKEND_DIR) not in sys.path:
 from flask import Flask, jsonify, request, send_file, send_from_directory, abort, render_template
 from goods_services import consolidate
 from Price_Doc import pricesched
+from database import tender_data
 from Technical.evalreport import build_eval_workbook, eval_to_json, parse_eval
 from chatbot_routes import chatbot_bp
 
@@ -51,6 +52,42 @@ OUTPUT_PREFIXES = {
     "price": "Price_Schedules",
 }
 
+# Uploaded documents are kept in the tenderdb database, not only in the job folder (which
+# is OS temp space and disappears on cleanup/reboot).
+_db_ready, _db_retry_at = False, 0.0
+
+def database_ready():
+    """True when the uploaded-document table can be reached. An unreachable server is
+    retried at most once a minute so a dead database cannot stall every upload."""
+    global _db_ready, _db_retry_at
+    if _db_ready:
+        return True
+    now = time.monotonic()
+    if now < _db_retry_at:
+        return False
+    try:
+        tender_data.init()
+        _db_ready = True
+    except Exception:
+        _db_retry_at = now + 60
+    return _db_ready
+
+def store_upload(job, mode, bidder, path, original_name, content_type):
+    """Insert one uploaded document into the database. Raises when the database refuses."""
+    with path.open("rb") as fh:
+        tender_data.store_document(job, original_name, fh.read(), mode=mode, bidder=bidder or None,
+                                   content_type=content_type)
+
+
+def technical_closing_date(evals):
+    """Get the tender closing date extracted from a technical evaluation report."""
+    for evaluation in evals or []:
+        for key, value in (evaluation.get("meta") or {}).items():
+            key_text = str(key).casefold()
+            if ("closing" in key_text or "closed" in key_text) and "date" in key_text and value:
+                return value
+    return None
+
 @app.get("/")
 def index():
     return send_from_directory(FRONTEND_DIR, "index.html")
@@ -60,8 +97,10 @@ def process():
     job = uuid.uuid4().hex[:12]
     inp = WORK / job / "in"
     inp.mkdir(parents=True)
-    specs, bad = [], []
+    specs, bad, store_problems = [], [], []
     names = request.form.getlist("names")
+    mode = request.form.get("mode") if request.form.get("mode") in ("all", "bids", "eval", "price") else None
+    store = database_ready()
     for i, f in enumerate(request.files.getlist("files")):
         ext = Path(f.filename or "").suffix.lower()
         if ext not in (".xlsx", ".xlsm", ".xls", ".docx", ".doc", ".pdf", ".zip"):
@@ -79,10 +118,17 @@ def process():
         if ext == ".zip":
             name = ""
         specs.append(f"{name}={path}" if name else str(path))
+        if store:
+            try:
+                store_upload(job, mode, name, path, original_name, f.mimetype)
+            except Exception as exc:
+                store_problems.append(f"{original_name}: could not be stored in the database ({exc})")
     if not specs:
         shutil.rmtree(WORK / job, ignore_errors=True)
         return jsonify(error="No usable files received (.xlsx/.xls/.pdf for GCC, .docx/.doc/.pdf for SCC or evaluation reports, or .zip)."), 400
-    mode = request.form.get("mode") if request.form.get("mode") in ("all", "bids", "eval", "price") else None
+    extra_problems = [f"{x}: unsupported file type, skipped" for x in bad] + store_problems
+    if not store:
+        extra_problems.append("documents were not stored: the tenderdb database could not be reached")
     if mode == "eval":
         evals, problems = [], []
         for spec in specs:
@@ -101,7 +147,7 @@ def process():
         eval_path = out / f"Technical_Evaluation_Compliance{consolidate._tender_suffix(tenders)}.xlsx"
         build_eval_workbook(evals, eval_path)
         return jsonify(job=job, eval=True, evals=[eval_to_json(label, parsed) for label, parsed in evals],
-                       problems=problems + [f"{x}: unsupported file type, skipped" for x in bad])
+                       problems=problems + extra_problems)
 
     if mode == "price":
         res = pricesched.run(specs, WORK / job / "out")
@@ -109,13 +155,17 @@ def process():
             return jsonify(error="None of the price schedules could be read.", problems=res["problems"]), 422
         if res["errors"]:
             return jsonify(error=res["errors"][0], job=job, price=True, rows=res["rows"], errors=res["errors"],
-                           problems=res["problems"] + [f"{x}: unsupported file type, skipped" for x in bad]), 422
+                           problems=res["problems"] + extra_problems), 422
         return jsonify(job=job, price=True, rows=res["rows"], notes=res["notes"],
-                       problems=res["problems"] + [f"{x}: unsupported file type, skipped" for x in bad])
+                       problems=res["problems"] + extra_problems)
 
     res = consolidate.run(specs, WORK / job / "out")
     if mode == "all":
-        price_res = pricesched.run(specs, WORK / job / "out")
+        price_res = pricesched.run(
+            specs,
+            WORK / job / "out",
+            closing_date=technical_closing_date(res.get("evals")),
+        )
         source_names = set()
         for spec in specs:
             _, raw_path = spec.split("=", 1) if "=" in spec and not Path(spec).exists() else ("", spec)
@@ -147,7 +197,7 @@ def process():
         problems = [
             problem for problem in res["problems"] + price_res["problems"]
             if not is_cross_parser_warning(problem)
-        ] + price_res["errors"] + [f"{x}: unsupported file type, skipped" for x in bad]
+        ] + price_res["errors"] + extra_problems
         if not (res["gcc"] or res["gct"] or res["scc"] or res["evals"] or price_res["file"]):
             return jsonify(error="None of the uploaded documents could be read.", problems=problems), 422
         return jsonify(
@@ -164,7 +214,7 @@ def process():
                    eval=False, evals=[], gcc_bidders=res["gcc_bidders"],
                    gct_bidders=res["gct_bidders"], scc_bidders=res["scc_bidders"],
                    document_summaries=res["document_summaries"],
-                   problems=res["problems"] + [f"{x}: unsupported file type, skipped" for x in bad])
+                   problems=res["problems"] + extra_problems)
 
 @app.get("/api/download/<job>/<kind>")
 def download(job, kind):
