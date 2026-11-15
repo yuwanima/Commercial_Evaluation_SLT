@@ -13,6 +13,30 @@ document.addEventListener("DOMContentLoaded", () => {
     const sourcesList = document.getElementById("sources-list");
     const retrievedCount = document.getElementById("retrieved-count");
     const questionCount = document.getElementById("question-count");
+    // Compliance visualization elements
+const visualizationContainer =
+    document.getElementById("visualization-container");
+
+const visualizationTitle =
+    document.getElementById("visualization-title");
+
+const visualizationSubtitle =
+    document.getElementById("visualization-subtitle");
+
+const visualizationSummary =
+    document.getElementById("visualization-summary");
+
+const visualizationWarnings =
+    document.getElementById("visualization-warnings");
+
+const visualizationWarningsList =
+    document.getElementById("visualization-warnings-list");
+
+const visualizationNotice =
+    document.getElementById("visualization-notice");
+
+let complianceDoughnutChart = null;
+let complianceBarChart = null;
 
     // Vendor upload elements
     const uploadForm = document.getElementById("upload-form");
@@ -34,52 +58,106 @@ document.addEventListener("DOMContentLoaded", () => {
         questionCount.textContent = `${questionInput.value.length} / 5000`;
     });
 
-    // Existing question submission
-    form.addEventListener("submit", async (event) => {
-        event.preventDefault();
+        
+// Existing question submission with visualization detection
+form.addEventListener("submit", async (event) => {
+    event.preventDefault();
 
-        const question = questionInput.value.trim();
+    const question = questionInput.value.trim();
 
-        if (!question) {
-            showError("Please enter a procurement question.");
-            return;
-        }
+    if (!question) {
+        showError("Please enter a procurement question.");
+        return;
+    }
 
-        loading.classList.remove("hidden");
-        errorMessage.classList.add("hidden");
-        answerSection.classList.add("hidden");
-        askButton.disabled = true;
-        askButton.textContent = "Processing...";
+    loading.classList.remove("hidden");
+    errorMessage.classList.add("hidden");
+    answerSection.classList.add("hidden");
 
-        try {
-            const response = await fetch(questionEndpoint, {
+    askButton.disabled = true;
+    askButton.textContent = "Processing...";
+
+    try {
+        // Route compliance graph requests to the Python analyzer.
+        if (
+            isComplianceVisualizationRequest(question) &&
+            !isWorkspaceComparisonRequest(question)
+        ) {
+
+            if (!activeSubmissionId) {
+                throw new Error(
+                    "Please upload vendor documents before requesting a compliance graph."
+                );
+            }
+
+            loading.textContent =
+                "Analysing vendor compliance and generating charts...";
+
+            const response = await fetch("/chatbot/visualize", {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json"
                 },
                 body: JSON.stringify({
-                question: question,
-                category: categoryInput.value || null,
-                top_k: 5,
-                submission_id: activeSubmissionId
+                    submission_id: activeSubmissionId
                 })
             });
 
             const data = await response.json();
 
             if (!response.ok) {
-                throw new Error(data.error || "Unable to process your question.");
+                throw new Error(
+                    data.error || "Unable to generate the compliance visualization."
+                );
             }
 
-            displayAnswer(data);
+            displayVisualization(data);
 
-        } catch (error) {
-            showError(error.message || "An unexpected error occurred.");
-        } finally {
-            loading.classList.add("hidden");
-            askButton.disabled = false;
-            askButton.textContent = "Ask Question";
+        } else {
+
+            // Preserve the existing RAG question-and-answer flow.
+            loading.textContent =
+                "Searching contract documents and generating your answer...";
+
+            const response = await fetch(questionEndpoint, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    question: question,
+                    category: categoryInput.value || null,
+                    top_k: 5,
+                    submission_id: activeSubmissionId
+                })
+            });
+
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(
+                    data.error || "Unable to process your question."
+                );
+            }
+
+            if (data.comparison) {
+                displayComparison(data);
+            } else {
+                displayAnswer(data);
+            }
         }
+
+    } catch (error) {
+        showError(error.message || "An unexpected error occurred.");
+    } finally {
+        loading.classList.add("hidden");
+        loading.textContent =
+            "Searching contract documents and generating your answer...";
+
+        askButton.disabled = false;
+        askButton.textContent = "Ask Question";
+    }
+
     });
 
     // Display selected vendor files
@@ -286,8 +364,350 @@ displayUploadResult(data);
 
         return output.join("\n");
     }
+
+
+// Identify compliance visualization requests.
+function isComplianceVisualizationRequest(question) {
+    return /\b(graph|chart|visuali[sz](?:ation|e)|plot|graphical|diagram|distribution)\b/i.test(question);
+}
+
+function isWorkspaceComparisonRequest(question) {
+    const comparisonIntent = /\b(compare|comparison|versus|vs\.?|against|which vendor|best vendor|meets? the tender requirements)\b/i;
+    const workspaceSubject = /\b(documents?|vendors?|submissions?|uploaded|workspace|delivery|technical|specifications?|compliance|price|warranty|security|validity)\b/i;
+    return comparisonIntent.test(question) && workspaceSubject.test(question);
+}
+
+
+// Destroy previous charts before rendering new ones.
+function destroyComplianceCharts() {
+    if (complianceDoughnutChart) {
+        complianceDoughnutChart.destroy();
+        complianceDoughnutChart = null;
+    }
+
+    if (complianceBarChart) {
+        complianceBarChart.destroy();
+        complianceBarChart = null;
+    }
+}
+
+
+// Display the compliance visualization returned by Python.
+function displayVisualization(data) {
+
+    if (typeof Chart === "undefined") {
+        throw new Error(
+            "Chart.js could not be loaded. Please check your internet connection."
+        );
+    }
+
+    const chartData = data.chart_data || {};
+    const labels = chartData.labels || [];
+    const counts = chartData.counts || [];
+    const percentages = chartData.percentages || [];
+
+    if (
+        !labels.length ||
+        labels.length !== counts.length ||
+        labels.length !== percentages.length
+    ) {
+        throw new Error(
+            "The compliance analyzer returned incomplete chart data."
+        );
+    }
+
+    destroyComplianceCharts();
+    document.getElementById("compliance-doughnut-chart").closest(".chart-card").classList.remove("hidden");
+    document.getElementById("compliance-bar-chart").closest(".chart-card").classList.remove("hidden");
+    document.getElementById("compliance-bar-chart").closest(".chart-card").querySelector("h4").textContent = "Clause Status Comparison";
+
+    // Hide ordinary RAG answer elements.
+    answerText.textContent = "";
+    sourcesContainer.classList.add("hidden");
+    retrievedCount.textContent = "";
+
+    visualizationTitle.textContent =
+        data.title || "Vendor Compliance Analysis";
+
+    visualizationSubtitle.textContent =
+        data.analysis_complete
+            ? "All extracted declarations have been matched to the identified clauses."
+            : "Preliminary analysis — review the warnings before relying on these results.";
+
+    // Display summary figures.
+    const summary = data.summary || {};
+
+    const breakdown = summary.breakdown || {};
+    const total = summary.total_clauses ?? counts.reduce(
+        (sum, count) => sum + Number(count || 0), 0
+    );
+
+    const stats = [
+        {
+            label: "Total Clauses",
+            value: total
+        },
+        {
+            label: "Complied",
+            value: breakdown["Complied"]?.count ?? summary.complied ?? 0
+        },
+        {
+            label: "Partially Complied",
+            value: breakdown["Partially Complied"]?.count ?? summary.partially_complied ?? 0
+        },
+        {
+            label: "Not Complied",
+            value: breakdown["Not Complied"]?.count ?? summary.not_complied ?? 0
+        }
+    ];
+
+    visualizationSummary.replaceChildren();
+
+    stats.forEach((stat) => {
+        const item = document.createElement("div");
+        item.className = "visualization-stat";
+
+        const value = document.createElement("strong");
+        value.textContent = stat.value;
+
+        const label = document.createElement("span");
+        label.textContent = stat.label;
+
+        item.append(value, label);
+        visualizationSummary.appendChild(item);
+    });
+
+    const statusColors = {
+        "Complied": "#16A34A",
+        "Not Complied": "#DC2626",
+        "Partially Complied": "#F59E0B",
+        "Not Specified": "#64748B",
+        "Unclear": "#8B5CF6",
+        "OCR Required": "#0EA5E9"
+    };
+    const chartColors = labels.map(label => statusColors[label] || "#64748B");
+
+    // Doughnut chart.
+    const doughnutContext = document
+        .getElementById("compliance-doughnut-chart")
+        .getContext("2d");
+
+    complianceDoughnutChart = new Chart(doughnutContext, {
+        type: "doughnut",
+
+        data: {
+            labels: labels,
+
+            datasets: [{
+                data: counts,
+                backgroundColor: chartColors,
+                borderColor: "#ffffff",
+                borderWidth: 3,
+                hoverOffset: 12
+            }]
+        },
+
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            cutout: "65%",
+
+            plugins: {
+                legend: {
+                    position: "bottom"
+                },
+
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            const index = context.dataIndex;
+
+                            return `${context.label}: ${context.raw} clauses (${percentages[index]}%)`;
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    // Horizontal bar chart of the three explicit declaration categories.
+    const barLabels = ["Complied", "Partially Complied", "Not Complied"]
+        .filter(label => labels.includes(label));
+    const barCounts = barLabels.map(label => counts[labels.indexOf(label)]);
+    const barColors = barLabels.map(label => statusColors[label]);
+    const barContext = document
+        .getElementById("compliance-bar-chart")
+        .getContext("2d");
+
+    const barChartCard = document.getElementById("compliance-bar-chart").closest(".chart-card");
+    barChartCard.classList.toggle("hidden", barLabels.length === 0);
+    if (barLabels.length) complianceBarChart = new Chart(barContext, {
+        type: "bar",
+
+        data: {
+            labels: barLabels,
+
+            datasets: [{
+                label: "Number of Clauses",
+                data: barCounts,
+                backgroundColor: barColors,
+                borderRadius: 7,
+                barThickness: 30
+            }]
+        },
+
+        options: {
+            indexAxis: "y",
+            responsive: true,
+            maintainAspectRatio: false,
+
+            scales: {
+                x: {
+                    beginAtZero: true,
+                    title: { display: true, text: "Number of clauses" },
+                    ticks: {
+                        precision: 0
+                    }
+                },
+
+                y: {
+                    title: { display: true, text: "Vendor declaration" },
+                    grid: {
+                        display: false
+                    }
+                }
+            },
+
+            plugins: {
+                legend: {
+                    display: false
+                },
+
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            const index = context.dataIndex;
+
+                            return `${context.raw} clauses (${percentages[index]}%)`;
+                        }
+                    }
+                }
+            },
+            animation: { duration: 500 }
+        },
+        plugins: [{
+            id: "complianceValueLabels",
+            afterDatasetsDraw(chart) {
+                const context = chart.ctx;
+                context.save();
+                context.font = "600 13px Arial";
+                context.fillStyle = "#243247";
+                context.textBaseline = "middle";
+                chart.getDatasetMeta(0).data.forEach((bar, index) => {
+                    context.fillText(String(barCounts[index]), bar.x + 8, bar.y);
+                });
+                context.restore();
+            }
+        }]
+    });
+
+    // Display analyzer warnings.
+    const warnings = Array.isArray(data.warnings)
+        ? data.warnings
+        : [];
+
+    visualizationWarningsList.replaceChildren();
+
+    warnings.forEach((warning) => {
+        const item = document.createElement("li");
+        item.textContent = warning;
+        visualizationWarningsList.appendChild(item);
+    });
+
+    visualizationWarnings.classList.toggle(
+        "hidden",
+        warnings.length === 0
+    );
+
+    visualizationNotice.textContent =
+        data.notice ||
+        "These figures represent vendor-declared compliance statuses. They do not independently establish contractual compliance.";
+
+    visualizationContainer.classList.remove("hidden");
+
+    answerSection.classList.remove("hidden");
+
+    answerSection.scrollIntoView({
+        behavior: "smooth",
+        block: "start"
+    });
+}
+
+function displayComparison(data) {
+    const comparison = data.comparison || {};
+    const submissions = comparison.submissions || [];
+    if (typeof Chart === "undefined" || submissions.length === 0) {
+        throw new Error("Comparison chart data is unavailable.");
+    }
+    destroyComplianceCharts();
+    answerText.textContent = data.answer || "Submission comparison";
+    sourcesContainer.classList.add("hidden");
+    retrievedCount.textContent = "";
+    visualizationTitle.textContent = "Submission Compliance Comparison";
+    visualizationSubtitle.textContent = "Evidence excerpts are grouped by submission. Vendor identity and declared compliance remain subject to the review notes.";
+    visualizationSummary.replaceChildren();
+    const notes = [...(comparison.warnings || [])];
+    const table = document.createElement("table");
+    table.className = "comparison-table";
+    const header = document.createElement("tr");
+    ["Submission / vendor", "Documents", ...(comparison.topics || [])].forEach((label) => {
+        const th = document.createElement("th"); th.textContent = label; header.appendChild(th);
+    });
+    table.appendChild(header);
+    submissions.forEach((submission) => {
+        const row = document.createElement("tr");
+        const identityCell = document.createElement("td"); identityCell.textContent = `${submission.label} — ${submission.vendor_identity}`; row.appendChild(identityCell);
+        const filesCell = document.createElement("td"); filesCell.textContent = (submission.documents || []).join(", ") || "Not found"; row.appendChild(filesCell);
+        (comparison.topics || []).forEach((topic) => {
+            const cell = document.createElement("td");
+            const items = (submission.topic_evidence || {})[topic] || [];
+            if (!items.length) { cell.textContent = "Not found in extracted text"; }
+            else { items.forEach((item, index) => { const p = document.createElement("p"); p.textContent = `${item.file_name} — ${item.location}${item.requires_ocr ? " (OCR required)" : ""}: ${item.text}`; cell.appendChild(p); if (index < items.length - 1) cell.appendChild(document.createElement("hr")); }); }
+            row.appendChild(cell);
+        });
+        table.appendChild(row);
+    });
+    const tableWrap = document.createElement("div"); tableWrap.className = "comparison-table-wrap"; tableWrap.appendChild(table); visualizationSummary.appendChild(tableWrap);
+    visualizationWarningsList.replaceChildren();
+    notes.forEach((note) => {
+        const item = document.createElement("li");
+        item.textContent = note;
+        visualizationWarningsList.appendChild(item);
+    });
+    visualizationWarnings.classList.toggle("hidden", notes.length === 0);
+    visualizationNotice.textContent = "Values are deterministic counts of extracted declarations, not independent verification of compliance.";
+    const doughnutCard = document.getElementById("compliance-doughnut-chart").closest(".chart-card");
+    doughnutCard.classList.add("hidden");
+    const barCard = document.getElementById("compliance-bar-chart").closest(".chart-card");
+    const deliveryMetric = comparison.metrics && comparison.metrics.delivery_days;
+    barCard.querySelector("h4").textContent = deliveryMetric && deliveryMetric.length ? "Extracted Delivery Period (days)" : "Declaration Counts by Submission";
+    const chartValues = submissions.flatMap(item => Object.values(item.counts || {}));
+    barCard.classList.toggle("hidden", !chartValues.some(value => Number(value) > 0));
+    if (chartValues.some(value => Number(value) > 0)) complianceBarChart = new Chart(document.getElementById("compliance-bar-chart").getContext("2d"), {
+        type: "bar",
+        data: deliveryMetric && deliveryMetric.length ? { labels: deliveryMetric.map(item => item.label), datasets: [{ label: "Days", data: deliveryMetric.map(item => item.value), backgroundColor: "#2563eb" }] } : { labels: submissions.map(item => item.label), datasets: (comparison.statuses || []).map((status, index) => ({ label: status, data: submissions.map(item => item.counts[status] || 0), backgroundColor: ["#16A34A", "#F59E0B", "#DC2626", "#64748B"][index] })) },
+        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
+    });
+    visualizationContainer.classList.remove("hidden");
+    answerSection.classList.remove("hidden");
+}
+
     // Display existing chatbot answer
     function displayAnswer(data) {
+        visualizationContainer.classList.add("hidden");
+        destroyComplianceCharts();
+        document.getElementById("compliance-doughnut-chart").closest(".chart-card").classList.remove("hidden");
+        document.getElementById("compliance-bar-chart").closest(".chart-card").querySelector("h4").textContent = "Clause Status Comparison";
         answerText.innerHTML = renderMarkdown(data.answer || "No answer was returned.");
 
         sourcesList.replaceChildren();

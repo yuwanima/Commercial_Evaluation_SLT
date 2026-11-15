@@ -149,6 +149,42 @@
         <section id="answer-section" class="answer-card hidden">
             <h2>Answer</h2>
             <div id="answer-text" class="answer-text"></div>
+            <!-- Compliance visualization -->
+<div id="visualization-container" class="visualization-container hidden">
+
+    <div class="visualization-heading">
+        <h3 id="visualization-title">Vendor Compliance Analysis</h3>
+        <p id="visualization-subtitle"></p>
+    </div>
+
+    <div class="visualization-summary" id="visualization-summary"></div>
+
+    <div class="charts-grid">
+
+        <div class="chart-card">
+            <h4>Compliance Distribution</h4>
+            <div class="chart-wrapper">
+                <canvas id="compliance-doughnut-chart"></canvas>
+            </div>
+        </div>
+
+        <div class="chart-card">
+            <h4>Clause Status Comparison</h4>
+            <div class="chart-wrapper">
+                <canvas id="compliance-bar-chart"></canvas>
+            </div>
+        </div>
+
+    </div>
+
+    <div id="visualization-warnings" class="visualization-warnings hidden">
+        <h4>Review Notes</h4>
+        <ul id="visualization-warnings-list"></ul>
+    </div>
+
+    <p id="visualization-notice" class="visualization-notice"></p>
+
+</div>
 
             <div id="sources-container" class="sources-container hidden">
                 <h3>Reference Sources</h3>
@@ -160,6 +196,7 @@
 
     </main>
 
-    <script src="{{ url_for('static', filename='chatbot.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='chart.umd.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='chatbot.js', v='chart-routing-v3') }}" defer></script>
 </body>
 </html>
