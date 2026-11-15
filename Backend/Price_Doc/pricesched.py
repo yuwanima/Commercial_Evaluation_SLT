@@ -13,7 +13,7 @@ Anything the bidder left blank but that can be calculated is calculated, as an e
 """
 import re, sys, tempfile, copy
 from collections import OrderedDict, defaultdict
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import openpyxl
@@ -28,6 +28,16 @@ except ImportError:
         from goods_services import consolidate as C
     except ImportError:                        # pragma: no cover - direct CLI use
         from Backend.goods_services import consolidate as C
+
+# Past prices are stored in the shared tenderdb so the "Previous Purchased" block of
+# every Annexure can be filled automatically, and so uploaded schedules survive a restart.
+try:
+    from database import tender_data as T
+except ImportError:
+    try:
+        from Backend.database import tender_data as T
+    except ImportError:
+        T = None
 
 try:
     import docx
@@ -380,6 +390,76 @@ def part_total(kind, items, include_commission=False):
     return total, notes
 
 
+def _line_money(kind, item):
+    """Per-line (unit_price, line_total) the same way the Excel computes it.
+
+    Used both for the workbook and for storing the line in tenderdb.bid_line.
+    """
+    qty = num(item.get("qty"))
+    if kind == "local":
+        unit = num(item.get("unit_incl"))
+        if unit is None:
+            ex = num(item.get("unit_excl"))
+            if ex is not None:
+                unit = ex * (1 + sum(num(item.get(x)) or 0 for x in ("vat", "sscl", "other")) / 100)
+        total = unit * (qty if qty is not None else 1) if unit is not None else None
+    else:
+        total = num(item.get("cif"))
+        if total is None:
+            fob = num(item.get("fob_total"))
+            if fob is None and num(item.get("fob_unit")) is not None:
+                fob = (qty if qty is not None else 1) * num(item.get("fob_unit"))
+            if fob is not None:
+                total = fob + (num(item.get("insurance")) or 0) + (num(item.get("freight")) or 0)
+        unit = total / qty if total and qty else total
+    return unit, total
+
+
+def store_price_entries(entries):
+    """Persist every parsed price line in tenderdb so later tenders can show it as
+    a Previous Purchase. A tender row is created (without an award) so the line can
+    be linked; the awarded company is filled in later once the decision is made.
+    Returns the number of stored lines, or None when the database is unavailable.
+    """
+    if T is None:
+        return None
+    stored = 0
+    tenders = set()
+    for entry in entries:
+        tender_no = entry.get("tender") or ""
+        bidder = entry.get("bidder") or ""
+        kind = entry.get("kind")
+        currency = entry.get("currency")
+        source = entry.get("source")
+        if not tender_no or not bidder:
+            continue
+        if tender_no not in tenders:
+            try:
+                T.set_tender(tender_no)
+            except Exception:
+                pass
+            tenders.add(tender_no)
+        lines = []
+        for item in entry["items"]:
+            unit, total = _line_money(kind, item)
+            if unit is None and total is None:
+                continue
+            lines.append(dict(
+                description=re.sub(r"\s+", " ", _text(item.get("desc"))).strip(),
+                qty=num(item.get("qty")),
+                unit_price=unit,
+                line_total=total,
+                origin=_text(item.get("origin")) or None,
+            ))
+        if not lines:
+            continue
+        try:
+            stored += T.store_bid_lines(tender_no, bidder, kind, currency, lines, source_file=source)
+        except Exception:
+            pass
+    return stored
+
+
 # --------------------------------------------------------------------------- Excel
 def _hcell(ws, r, c, text, fill="1F3864", color="FFFFFF"):
     x = ws.cell(r, c, text)
@@ -518,12 +598,67 @@ ANNEXURE_COLUMN_WIDTHS = {
 AMOUNT_COLUMNS = {7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 23, 26}
 
 
-def _populate_annexure_sheet(ws, entries, tender="", purchasing=""):
+def _report_date(value):
+    """Convert a technical-report/database date value to ``date``."""
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value or "").strip()
+    for fmt in ("%d-%m-%Y", "%d-%m-%y", "%d/%m/%Y", "%d/%m/%y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _usd_rate_pair(rate_date):
+    """Return the database buy/sell rates for a date, or ``None`` if unavailable."""
+    if T is None or not rate_date:
+        return None
+    try:
+        buy = T.rate_on(rate_date.isoformat(), "buy")["rate"]
+        sell = T.rate_on(rate_date.isoformat(), "sell")["rate"]
+    except Exception:
+        return None
+    return float(buy), float(sell)
+
+
+def _populate_exchange_rates(ws, closing_date=None, po_dates=()):
+    """Fill the template's closing-date and previous-PO-date USD rate cells."""
+    closing = _report_date(closing_date)
+    pair = _usd_rate_pair(closing)
+    ws["R4"] = f"1 USD (Tender Closing Date) = {closing.strftime('%d-%m-%y')}" if closing else "1 USD (Tender Closing Date)"
+    ws["S5"] = pair[0] if pair else None
+    ws["T5"] = pair[1] if pair else None
+    closing_average = round(sum(pair) / 2, 4) if pair else None
+    ws["U5"] = closing_average
+
+    for header, rate_column, average_one_column, average_two_column, po_date in (
+        ("V4", "V5", "W5", "X5", po_dates[0] if len(po_dates) > 0 else None),
+        ("Y4", "Y5", "Z5", "AA5", po_dates[1] if len(po_dates) > 1 else None),
+    ):
+        parsed = _report_date(po_date)
+        po_pair = _usd_rate_pair(parsed)
+        ws[header] = f"PO Date : {parsed.strftime('%d-%m-%Y')}" if parsed else None
+        po_rate = round(sum(po_pair) / 2, 4) if po_pair else None
+        ws[rate_column] = po_rate
+        if po_rate is None:
+            ws[average_one_column] = None
+            ws[average_two_column] = None
+            continue
+        first_average = round((closing_average + po_rate) / 2, 4) if closing_average is not None else po_rate
+        ws[average_one_column] = first_average
+        ws[average_two_column] = round((po_rate + first_average) / 2, 4)
+
+
+def _populate_annexure_sheet(ws, entries, tender="", purchasing="", closing_date=None):
     """Populate one Annexure sheet with one company's extracted prices."""
     rows = _annexure_rows(entries)
     first_row, last_template_row = 9, 80
 
-    # 1. Update Header with Tender No and Purchasing Details
+    # 1. Update Header with Tender No, Purchasing Details, and database rates
     tender_no = tender or next((e.get("tender") for e in entries if e.get("tender")), "")
     purchasing_desc = purchasing or next((e.get("purchasing") for e in entries if e.get("purchasing")), "")
 
@@ -537,6 +672,7 @@ def _populate_annexure_sheet(ws, entries, tender="", purchasing=""):
     
     header_text = " ".join(header_parts)
     ws["B2"].value = header_text
+    previous_po_dates = []
     ws.row_dimensions[1].height = 24
     ws.row_dimensions[2].height = 24
     for r in [1, 2]:
@@ -608,6 +744,31 @@ def _populate_annexure_sheet(ws, entries, tender="", purchasing=""):
             21: item["unit_incl"],
             28: f"Source: {item['source']} ({item['currency'] or 'currency not stated'})",
         }
+        # Previous Purchased: pull matching awarded foreign lines from tenderdb so the
+        # Annexure's V/W/X and Y/Z/AA columns fill automatically. Only meaningful for
+        # foreign CIF quotations (the comparison is in USD).
+        if item["kind"] != "local" and item["cif"] is not None and T is not None:
+            try:
+                previous = T.previous_purchased(
+                    item["description"], item["cif"], limit=2,
+                    exclude_tender=tender_no or None,
+                )
+            except Exception:
+                previous = []
+            if previous:
+                for previous_row in previous:
+                    po_date = _report_date(previous_row.get("po_date"))
+                    if po_date and po_date not in previous_po_dates:
+                        previous_po_dates.append(po_date)
+                        if len(previous_po_dates) == 2:
+                            break
+                values[22] = previous[0]["tender_no"]
+                values[23] = previous[0]["cif_usd"]
+                values[24] = f"=(K{row}-W{row})/W{row}*100"
+            if len(previous) >= 2:
+                values[25] = previous[1]["tender_no"]
+                values[26] = previous[1]["cif_usd"]
+                values[27] = f"=(K{row}-Z{row})/Z{row}*100"
         for column, value in values.items():
             cell = ws.cell(row, column)
             cell.value = _annexure_value(value)
@@ -632,6 +793,8 @@ def _populate_annexure_sheet(ws, entries, tender="", purchasing=""):
             else:
                 cell.alignment = Alignment(horizontal="center", vertical="center")
 
+    _populate_exchange_rates(ws, closing_date, previous_po_dates)
+
     # Rank foreign quotations by CIF and local quotations by tax-inclusive unit price.
     ranked = sorted(
         (item for item in rows if (item["cif"] if item["kind"] != "local" else item["unit_incl"]) is not None),
@@ -655,7 +818,7 @@ def _populate_annexure_sheet(ws, entries, tender="", purchasing=""):
     ws.freeze_panes = "G9"
 
 
-def build_annexure_workbook(entries, out, template_path=ANNEXURE_TEMPLATE, tender="", purchasing=""):
+def build_annexure_workbook(entries, out, template_path=ANNEXURE_TEMPLATE, tender="", purchasing="", closing_date=None):
     """Create one Annexure-formatted evaluation tab for each company."""
     wb = openpyxl.load_workbook(template_path)
     template = wb[wb.sheetnames[0]]
@@ -674,6 +837,7 @@ def build_annexure_workbook(entries, out, template_path=ANNEXURE_TEMPLATE, tende
             [entry for entry in entries if entry["bidder"] == bidder],
             tender=tender,
             purchasing=purchasing,
+            closing_date=closing_date,
         )
 
     wb.calculation.calcMode = "auto"
@@ -682,10 +846,10 @@ def build_annexure_workbook(entries, out, template_path=ANNEXURE_TEMPLATE, tende
     wb.save(out)
 
 
-def build_workbook(entries, out, tender="", purchasing=""):
+def build_workbook(entries, out, tender="", purchasing="", closing_date=None):
     """Create the Annexure-formatted price evaluation workbook."""
     if ANNEXURE_TEMPLATE.exists():
-        build_annexure_workbook(entries, out, tender=tender, purchasing=purchasing)
+        build_annexure_workbook(entries, out, tender=tender, purchasing=purchasing, closing_date=closing_date)
         return
 
     # Keep the prior layout as a safe fallback if the template is unavailable.
@@ -909,7 +1073,7 @@ def _output_filename(entries):
     return "Price_Schedules" + (f"_{'-'.join(tenders)}" if tenders else "") + ".xlsx"
 
 
-def run(inputs, out):
+def run(inputs, out, closing_date=None):
     """-> dict(file, rows=[...], problems=[...])"""
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
@@ -935,6 +1099,8 @@ def run(inputs, out):
             entries.append(dict(bidder=bidder, kind=p["kind"], items=p["items"], stated=p["stated"],
                                 currency=detect_currency(data["text"], p["kind"]), source=orig.name,
                                 tender=data["tender"], purchasing=data.get("purchasing", "")))
+    # Keep the parsed prices in tenderdb so future tenders can show them as Previous Purchases.
+    store_price_entries(entries)
     res = dict(file=None, rows=[], problems=problems, notes=[], errors=[],
                tenders=list(OrderedDict.fromkeys(
                    e["tender"] for e in entries if e.get("tender")
@@ -946,7 +1112,8 @@ def run(inputs, out):
         res["file"] = out / _output_filename(entries)
         overall_tender = ", ".join(res["tenders"]) if res["tenders"] else ""
         overall_purchasing = " / ".join(res["purchasings"]) if res["purchasings"] else ""
-        build_workbook(entries, res["file"], tender=overall_tender, purchasing=overall_purchasing)
+        build_workbook(entries, res["file"], tender=overall_tender, purchasing=overall_purchasing,
+                       closing_date=closing_date)
         rows = OrderedDict()
         for e in sorted(entries, key=lambda x: (x["bidder"].lower(), x["kind"])):
             total, notes = part_total(e["kind"], e["items"])

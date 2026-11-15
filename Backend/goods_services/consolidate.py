@@ -316,7 +316,12 @@ def ocr_embedded_images(path):
     if path.suffix.lower() == ".pdf":
         try:
             import importlib
-            fitz = importlib.import_module("fitz")
+            try:
+                # PyMuPDF >= 1.24 exposes the module as "pymupdf"; "fitz" is the
+                # deprecated alias that raises a FutureWarning.
+                fitz = importlib.import_module("pymupdf")
+            except ImportError:
+                fitz = importlib.import_module("fitz")
             pdf = fitz.open(str(path))
             for page in pdf:
                 blocks = page.get_text("blocks")
