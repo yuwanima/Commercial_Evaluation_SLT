@@ -3,56 +3,85 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ContractWise AI</title>
+    <title>ComOps</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='chatbot.css') }}">
 </head>
 <body>
 
     <header class="chatbot-header">
-        <div>
-            <h1>ContractWise AI</h1>
-            <p>Your AI assistant for GCC and SCC tender contract documents.</p>
+        <div class="brand-lockup">
+            <h1>ComOps</h1>
+            <p>SLT Procurement Assistant</p>
         </div>
-        <a class="back-link" href="{{ url_for('index') }}">Back to Tender Processing</a>
+        <div class="header-actions">
+            <button type="button" id="new-chat-button" class="new-chat-button">New chat</button>
+            <a class="back-link" href="{{ url_for('index') }}">Back to Tender Processing</a>
+        </div>
     </header>
 
     <main class="chatbot-container">
-
-        <section class="chatbot-card">
-            <h2>Ask a Question</h2>
-
-            <p class="description">
-                Select a contract category or search across all five categories.
-                Answers are generated using the approved contract documents.
-            </p>
-
-            <form id="chatbot-form" data-endpoint="{{ url_for('chatbot.chatbot_ask') }}">
-
-                <label for="category">Contract Category</label>
-                <select id="category" name="category">
-                    <option value="">All contract categories</option>
-                    {% for category in categories %}
-                    <option value="{{ category }}">{{ category }}</option>
-                    {% endfor %}
-                </select>
-
-                <label for="question">Your Question</label>
-                <textarea
-                    id="question"
-                    name="question"
-                    rows="4"
-                    maxlength="5000"
-                    placeholder="Example: What are the requirements for Performance Security?"
-                    required
-                ></textarea>
-
-                <div class="form-footer">
-                    <span id="question-count">0 / 5000</span>
-                    <button type="submit" id="ask-button">Ask Question</button>
+        <section id="answer-section" class="conversation-shell" aria-label="ComOps conversation">
+            <div id="welcome-screen" class="welcome-screen">
+                <div class="welcome-avatar" aria-hidden="true">CO</div>
+                <p class="eyebrow">SLT PROCUREMENT ASSISTANT</p>
+                <h2>Hello, I’m ComOps.</h2>
+                <p class="welcome-copy">Ask about SLT procurement contracts, clauses, requirements and conditions. Answers are grounded in the available contract documents.</p>
+                <div class="suggestion-grid" aria-label="Suggested questions">
+                    <button type="button" class="suggestion-card" data-prompt="What are the requirements for Performance Security?">What are the requirements for Performance Security?</button>
+                    <button type="button" class="suggestion-card" data-prompt="What is the validity period of the Bid Security?">What is the validity period of the Bid Security?</button>
+                    <button type="button" class="suggestion-card" data-prompt="What are the supplier's obligations under the contract?">What are the supplier’s obligations under the contract?</button>
+                    <button type="button" class="suggestion-card" data-prompt="What are the delivery requirements?">What are the delivery requirements?</button>
+                    <button type="button" class="suggestion-card" data-prompt="What are the conditions for contract termination?">What are the conditions for contract termination?</button>
                 </div>
-
-            </form>
+            </div>
+            <div id="conversation-messages" class="conversation-messages"></div>
+            <div id="visualization-container" class="visualization-container hidden">
+                <div class="visualization-heading">
+                    <h3 id="visualization-title">Vendor Compliance Analysis</h3>
+                    <p id="visualization-subtitle"></p>
+                </div>
+                <div class="visualization-summary" id="visualization-summary"></div>
+                <div class="charts-grid">
+                    <div class="chart-card">
+                        <h4>Compliance Distribution</h4>
+                        <div class="chart-wrapper"><canvas id="compliance-doughnut-chart"></canvas></div>
+                    </div>
+                    <div class="chart-card">
+                        <h4>Clause Status Comparison</h4>
+                        <div class="chart-wrapper"><canvas id="compliance-bar-chart"></canvas></div>
+                    </div>
+                </div>
+                <div id="visualization-warnings" class="visualization-warnings hidden">
+                    <h4>Review Notes</h4>
+                    <ul id="visualization-warnings-list"></ul>
+                </div>
+                <p id="visualization-notice" class="visualization-notice"></p>
+            </div>
         </section>
+
+        <form id="chatbot-form" class="message-composer" data-endpoint="{{ url_for('chatbot.chatbot_ask') }}">
+            <label class="visually-hidden" for="category">Contract Category</label>
+            <select id="category" name="category" aria-label="Contract Category">
+                <option value="">All contract categories</option>
+                {% for category in categories %}
+                <option value="{{ category }}">{{ category }}</option>
+                {% endfor %}
+            </select>
+            <div class="composer-input-wrap">
+                <label class="visually-hidden" for="question">Your question</label>
+                <textarea id="question" name="question" rows="1" maxlength="5000" placeholder="Ask ComOps anything about SLT procurement…" required></textarea>
+                <div class="composer-footer">
+                    <span id="question-count">0 / 5000</span>
+                    <button type="submit" id="ask-button" aria-label="Send message" title="Send message">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12 20 4l-5 16-3-6-8-2Zm8 2 8-10" /></svg>
+                    </button>
+                </div>
+            </div>
+            <p class="conversation-note">Answers use the current question and retrieved evidence. Previous messages are not automatically sent as context.</p>
+        </form>
+
+        <section id="loading" class="loading hidden" role="status">Searching contract documents and generating your answer…</section>
+        <section id="error-message" class="error-message hidden" role="alert"></section>
 
         <section class="chatbot-card upload-card">
             <h2>Vendor Submission Upload</h2>
@@ -138,60 +167,6 @@
                 Some pages or documents require additional review.
                 Text extraction alone does not confirm contractual compliance.
             </div>
-        </section>
-
-        <section id="loading" class="loading hidden">
-            Searching contract documents and generating your answer...
-        </section>
-
-        <section id="error-message" class="error-message hidden" role="alert"></section>
-
-        <section id="answer-section" class="answer-card hidden">
-            <h2>Answer</h2>
-            <div id="answer-text" class="answer-text"></div>
-            <!-- Compliance visualization -->
-<div id="visualization-container" class="visualization-container hidden">
-
-    <div class="visualization-heading">
-        <h3 id="visualization-title">Vendor Compliance Analysis</h3>
-        <p id="visualization-subtitle"></p>
-    </div>
-
-    <div class="visualization-summary" id="visualization-summary"></div>
-
-    <div class="charts-grid">
-
-        <div class="chart-card">
-            <h4>Compliance Distribution</h4>
-            <div class="chart-wrapper">
-                <canvas id="compliance-doughnut-chart"></canvas>
-            </div>
-        </div>
-
-        <div class="chart-card">
-            <h4>Clause Status Comparison</h4>
-            <div class="chart-wrapper">
-                <canvas id="compliance-bar-chart"></canvas>
-            </div>
-        </div>
-
-    </div>
-
-    <div id="visualization-warnings" class="visualization-warnings hidden">
-        <h4>Review Notes</h4>
-        <ul id="visualization-warnings-list"></ul>
-    </div>
-
-    <p id="visualization-notice" class="visualization-notice"></p>
-
-</div>
-
-            <div id="sources-container" class="sources-container hidden">
-                <h3>Reference Sources</h3>
-                <ul id="sources-list"></ul>
-            </div>
-
-            <p id="retrieved-count" class="retrieved-count"></p>
         </section>
 
     </main>
