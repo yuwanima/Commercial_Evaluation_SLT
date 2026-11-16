@@ -8,10 +8,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const loading = document.getElementById("loading");
     const errorMessage = document.getElementById("error-message");
     const answerSection = document.getElementById("answer-section");
-    const answerText = document.getElementById("answer-text");
-    const sourcesContainer = document.getElementById("sources-container");
-    const sourcesList = document.getElementById("sources-list");
-    const retrievedCount = document.getElementById("retrieved-count");
+    const conversationMessages = document.getElementById("conversation-messages");
+    const welcomeScreen = document.getElementById("welcome-screen");
+    const newChatButton = document.getElementById("new-chat-button");
     const questionCount = document.getElementById("question-count");
     // Compliance visualization elements
 const visualizationContainer =
@@ -52,11 +51,126 @@ let complianceBarChart = null;
     const uploadEndpoint = uploadForm.dataset.endpoint;
     // Keep the currently active vendor document submission.
     let activeSubmissionId = null;
+    let isProcessing = false;
 
     // Existing question character counter
     questionInput.addEventListener("input", () => {
         questionCount.textContent = `${questionInput.value.length} / 5000`;
+        questionInput.style.height = "auto";
+        questionInput.style.height = `${Math.min(questionInput.scrollHeight, 180)}px`;
+        updateSendButton();
     });
+
+    questionInput.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+            event.preventDefault();
+            if (!isProcessing && questionInput.value.trim()) form.requestSubmit();
+        }
+    });
+
+    document.querySelectorAll(".suggestion-card").forEach((suggestion) => {
+        suggestion.addEventListener("click", () => {
+            questionInput.value = suggestion.dataset.prompt || suggestion.textContent.trim();
+            questionInput.dispatchEvent(new Event("input", { bubbles: true }));
+            form.requestSubmit();
+        });
+    });
+
+    newChatButton.addEventListener("click", () => {
+        conversationMessages.replaceChildren();
+        welcomeScreen.classList.remove("hidden");
+        questionInput.value = "";
+        questionInput.style.height = "auto";
+        questionCount.textContent = "0 / 5000";
+        errorMessage.classList.add("hidden");
+        loading.classList.add("hidden");
+        visualizationContainer.classList.add("hidden");
+        if (visualizationContainer.parentElement !== answerSection) {
+            answerSection.appendChild(visualizationContainer);
+        }
+        destroyComplianceCharts();
+        updateSendButton();
+        questionInput.focus();
+    });
+
+    function updateSendButton() {
+        askButton.disabled = isProcessing || !questionInput.value.trim();
+        newChatButton.disabled = isProcessing;
+    }
+
+    updateSendButton();
+
+    function appendCopyAction(target, textToCopy) {
+        const actions = document.createElement("div");
+        actions.className = "message-actions";
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "copy-answer-button";
+        button.textContent = "Copy answer";
+        button.addEventListener("click", async () => {
+            try {
+                await navigator.clipboard.writeText(textToCopy);
+                button.textContent = "Copied";
+                setTimeout(() => { button.textContent = "Copy answer"; }, 1400);
+            } catch {
+                button.textContent = "Copy unavailable";
+            }
+        });
+        actions.appendChild(button);
+        target.appendChild(actions);
+    }
+
+    function appendUserMessage(text) {
+        const row = document.createElement("article");
+        row.className = "message-row user-message";
+        const bubble = document.createElement("div");
+        bubble.className = "message-bubble";
+        bubble.textContent = text;
+        const avatar = document.createElement("div");
+        avatar.className = "user-avatar";
+        avatar.setAttribute("aria-hidden", "true");
+        avatar.textContent = "You";
+        row.append(bubble, avatar);
+        conversationMessages.appendChild(row);
+        scrollConversationToEnd();
+    }
+
+    function createAssistantMessage() {
+        const row = document.createElement("article");
+        row.className = "message-row assistant-message";
+        const avatar = document.createElement("img");
+        avatar.className = "assistant-avatar";
+        avatar.src = "/chatbot.jpg";
+        avatar.alt = "ComOps";
+        const bubble = document.createElement("div");
+        bubble.className = "message-bubble";
+        row.append(avatar, bubble);
+        conversationMessages.appendChild(row);
+        return bubble;
+    }
+
+    function appendTypingIndicator() {
+        const bubble = createAssistantMessage();
+        bubble.classList.add("typing-bubble");
+        bubble.setAttribute("aria-label", "ComOps is thinking");
+        bubble.innerHTML = '<span></span><span></span><span></span>';
+        scrollConversationToEnd();
+        return bubble.closest(".message-row");
+    }
+
+    function appendAssistantText(text, isError = false) {
+        const bubble = createAssistantMessage();
+        bubble.classList.toggle("assistant-error", isError);
+        const content = document.createElement("div");
+        content.className = "answer-text";
+        content.textContent = text;
+        bubble.appendChild(content);
+        scrollConversationToEnd();
+    }
+
+    function scrollConversationToEnd() {
+        answerSection.scrollTop = answerSection.scrollHeight;
+    }
 
         
 // Existing question submission with visualization detection
@@ -70,12 +184,13 @@ form.addEventListener("submit", async (event) => {
         return;
     }
 
-    loading.classList.remove("hidden");
+    if (isProcessing) return;
+    isProcessing = true;
+    updateSendButton();
+    welcomeScreen.classList.add("hidden");
+    appendUserMessage(question);
+    const typingIndicator = appendTypingIndicator();
     errorMessage.classList.add("hidden");
-    answerSection.classList.add("hidden");
-
-    askButton.disabled = true;
-    askButton.textContent = "Processing...";
 
     try {
         // Route compliance graph requests to the Python analyzer.
@@ -89,9 +204,6 @@ form.addEventListener("submit", async (event) => {
                     "Please upload vendor documents before requesting a compliance graph."
                 );
             }
-
-            loading.textContent =
-                "Analysing vendor compliance and generating charts...";
 
             const response = await fetch("/chatbot/visualize", {
                 method: "POST",
@@ -116,9 +228,6 @@ form.addEventListener("submit", async (event) => {
         } else {
 
             // Preserve the existing RAG question-and-answer flow.
-            loading.textContent =
-                "Searching contract documents and generating your answer...";
-
             const response = await fetch(questionEndpoint, {
                 method: "POST",
                 headers: {
@@ -147,15 +256,17 @@ form.addEventListener("submit", async (event) => {
             }
         }
 
-    } catch (error) {
-        showError(error.message || "An unexpected error occurred.");
-    } finally {
-        loading.classList.add("hidden");
-        loading.textContent =
-            "Searching contract documents and generating your answer...";
+        questionInput.value = "";
+        questionInput.style.height = "auto";
+        questionCount.textContent = "0 / 5000";
 
-        askButton.disabled = false;
-        askButton.textContent = "Ask Question";
+    } catch (error) {
+        appendAssistantText(error.message || "I couldn’t complete that request. Please try again.", true);
+    } finally {
+        typingIndicator.remove();
+        loading.classList.add("hidden");
+        isProcessing = false;
+        updateSendButton();
     }
 
     });
@@ -417,14 +528,12 @@ function displayVisualization(data) {
     }
 
     destroyComplianceCharts();
+    const messageBubble = createAssistantMessage();
+    messageBubble.appendChild(visualizationContainer);
+    visualizationContainer.classList.remove("hidden");
     document.getElementById("compliance-doughnut-chart").closest(".chart-card").classList.remove("hidden");
     document.getElementById("compliance-bar-chart").closest(".chart-card").classList.remove("hidden");
     document.getElementById("compliance-bar-chart").closest(".chart-card").querySelector("h4").textContent = "Clause Status Comparison";
-
-    // Hide ordinary RAG answer elements.
-    answerText.textContent = "";
-    sourcesContainer.classList.add("hidden");
-    retrievedCount.textContent = "";
 
     visualizationTitle.textContent =
         data.title || "Vendor Compliance Analysis";
@@ -476,6 +585,10 @@ function displayVisualization(data) {
         item.append(value, label);
         visualizationSummary.appendChild(item);
     });
+    appendCopyAction(
+        messageBubble,
+        [data.title || "Vendor Compliance Analysis", ...stats.map(stat => `${stat.label}: ${stat.value}`), data.notice || ""].filter(Boolean).join("\n")
+    );
 
     const statusColors = {
         "Complied": "#16A34A",
@@ -636,11 +749,7 @@ function displayVisualization(data) {
     visualizationContainer.classList.remove("hidden");
 
     answerSection.classList.remove("hidden");
-
-    answerSection.scrollIntoView({
-        behavior: "smooth",
-        block: "start"
-    });
+    scrollConversationToEnd();
 }
 
 function displayComparison(data) {
@@ -650,9 +759,14 @@ function displayComparison(data) {
         throw new Error("Comparison chart data is unavailable.");
     }
     destroyComplianceCharts();
-    answerText.textContent = data.answer || "Submission comparison";
-    sourcesContainer.classList.add("hidden");
-    retrievedCount.textContent = "";
+    const messageBubble = createAssistantMessage();
+    const answer = document.createElement("div");
+    answer.className = "answer-text";
+    answer.textContent = data.answer || "Submission comparison";
+    messageBubble.appendChild(answer);
+    appendCopyAction(messageBubble, answer.textContent);
+    messageBubble.appendChild(visualizationContainer);
+    visualizationContainer.classList.remove("hidden");
     visualizationTitle.textContent = "Submission Compliance Comparison";
     visualizationSubtitle.textContent = "Evidence excerpts are grouped by submission. Vendor identity and declared compliance remain subject to the review notes.";
     visualizationSummary.replaceChildren();
@@ -700,6 +814,7 @@ function displayComparison(data) {
     });
     visualizationContainer.classList.remove("hidden");
     answerSection.classList.remove("hidden");
+    scrollConversationToEnd();
 }
 
     // Display existing chatbot answer
@@ -708,24 +823,33 @@ function displayComparison(data) {
         destroyComplianceCharts();
         document.getElementById("compliance-doughnut-chart").closest(".chart-card").classList.remove("hidden");
         document.getElementById("compliance-bar-chart").closest(".chart-card").querySelector("h4").textContent = "Clause Status Comparison";
+        const bubble = createAssistantMessage();
+        const answerText = document.createElement("div");
+        answerText.className = "answer-text";
         answerText.innerHTML = renderMarkdown(data.answer || "No answer was returned.");
-
-        sourcesList.replaceChildren();
+        bubble.appendChild(answerText);
 
         const sources = Array.isArray(data.sources) ? data.sources : [];
 
-        sources.forEach((source) => {
-            const item = document.createElement("li");
-            item.textContent = source;
-            sourcesList.appendChild(item);
-        });
+        if (sources.length) {
+            const sourcesContainer = document.createElement("details");
+            sourcesContainer.className = "message-sources";
+            const summary = document.createElement("summary");
+            summary.textContent = `Sources (${sources.length})`;
+            const list = document.createElement("ul");
+            sources.forEach((source) => {
+                const item = document.createElement("li");
+                item.textContent = source;
+                list.appendChild(item);
+            });
+            sourcesContainer.append(summary, list);
+            bubble.appendChild(sourcesContainer);
+        }
 
-        sourcesContainer.classList.toggle("hidden", sources.length === 0);
-
-        retrievedCount.textContent =
-            `Retrieved reference sections: ${data.retrieved_count ?? sources.length}`;
+        appendCopyAction(bubble, data.answer || "");
 
         answerSection.classList.remove("hidden");
+        scrollConversationToEnd();
     }
 
     // Display vendor submission processing results
