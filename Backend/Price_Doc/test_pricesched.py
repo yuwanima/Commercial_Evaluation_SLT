@@ -1,10 +1,12 @@
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from docx import Document
 
 from Backend.Price_Doc import pricesched
+from Backend.Technical import convert
 
 
 class PriceBidderIdentificationTests(unittest.TestCase):
@@ -195,6 +197,67 @@ class PriceBidderIdentificationTests(unittest.TestCase):
             # T = with SSCL without VAT = 102,000;  U = with SSCL & VAT = 120,000
             self.assertAlmostEqual(sheet["T9"].value, 102000)
             self.assertAlmostEqual(sheet["U9"].value, 120000)
+
+    def test_previous_purchased_group_is_single_and_populated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "foreign.docx"
+            doc = Document()
+            doc.add_paragraph("Official Frank: Acme Power (Pvt) Ltd")
+            table = doc.add_table(rows=2, cols=10)
+            headers = [
+                "S/No", "Description", "Qty", "Country of Origin",
+                "FOB/FCA Unit Price", "FOB/FCA Total Cost", "Total Insurance",
+                "Total Freight", "Total CIF/CIP Cost", "Local Agent's Commission",
+            ]
+            values = ["1", "Optical module", "2", "China", "40", "80", "2", "3", "85", "0"]
+            for cell, value in zip(table.rows[0].cells, headers):
+                cell.text = value
+            for cell, value in zip(table.rows[1].cells, values):
+                cell.text = value
+            doc.save(path)
+
+            previous = [
+                {"tender_no": "OLD/001", "cif_usd": 41.5, "po_date": "2025-01-10"},
+                {"tender_no": "OLD/002", "cif_usd": 43.0, "po_date": "2024-06-15"},
+            ]
+            with patch.object(pricesched.T, "previous_purchased", return_value=previous):
+                result = pricesched.run(
+                    [f"current={path}"], Path(directory) / "out"
+                )
+
+            from openpyxl import load_workbook
+            sheet = load_workbook(result["file"], data_only=False).active
+            self.assertTrue(sheet.column_dimensions["Y"].hidden)
+            self.assertTrue(sheet.column_dimensions["AA"].hidden)
+            self.assertEqual(sheet["V9"].value, "OLD/001")
+            self.assertEqual(sheet["W9"].value, 41.5)
+            self.assertIsNone(sheet["Y9"].value)
+            self.assertIsNone(sheet["Z9"].value)
+
+    def test_pdf_price_table_continuation_pages_are_read(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "multi_page_price.docx"
+            output = Path(directory) / "converted.docx"
+            header = [
+                "S/No", "Description", "Qty",
+                "Unit Price (Rs.) [Excluding Taxes]", "VAT (%)", "NBT (%)",
+                "Other Taxes (%)", "Unit Price (Rs.) [Including Taxes]",
+            ]
+            first_page = [header, ["1", "First page item", "1", "100", "0", "0", "0", "100"]]
+            continuation_page = [["2", "Second page item", "2", "250", "0", "0", "0", "250"]]
+            convert._pdf_to_docx(
+                ["Tender No: SLT/PROC/2026/099", "Official Frank: Acme Power (Pvt) Ltd"],
+                [first_page, continuation_page],
+                output,
+            )
+
+            result = pricesched.parse_price(output)
+
+            self.assertEqual(len(result["parts"]), 1)
+            self.assertEqual(
+                [item["desc"] for item in result["parts"][0]["items"]],
+                ["First page item", "Second page item"],
+            )
 
 
 if __name__ == "__main__":

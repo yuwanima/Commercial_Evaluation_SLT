@@ -4,13 +4,13 @@ from collections import OrderedDict, defaultdict
 from datetime import datetime
 from pathlib import Path
 
-import openpyxl
-from openpyxl.formatting.rule import FormulaRule
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-from openpyxl.utils import get_column_letter as L
+import openpyxl  # type: ignore[reportMissingModuleSource]
+from openpyxl.formatting.rule import FormulaRule  # type: ignore[reportMissingModuleSource]
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side  # type: ignore[reportMissingModuleSource]
+from openpyxl.utils import get_column_letter as L  # type: ignore[reportMissingModuleSource]
 
 try:
-    import docx
+    import docx  # type: ignore[reportMissingImports]
 except ImportError:
     docx = None
 
@@ -282,9 +282,10 @@ def extract_header_name(text, fallback):
 def ocr_embedded_images(path):
     """OCR embedded document images for image-only company stamps."""
     try:
-        import pytesseract
-        from PIL import Image
-        from pypdf import PdfReader
+        from importlib import import_module
+        pytesseract = import_module("pytesseract")
+        Image = import_module("PIL.Image")
+        PdfReader = import_module("pypdf").PdfReader
     except ImportError:
         return ""
     tesseract = Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe")
@@ -348,7 +349,8 @@ def document_has_embedded_images(path):
     """Return whether a document contains embedded image content."""
     path = Path(path)
     if path.suffix.lower() == ".pdf":
-        from pypdf import PdfReader
+        from importlib import import_module
+        PdfReader = import_module("pypdf").PdfReader
         return any(page.images for page in PdfReader(str(path)).pages)
     if path.suffix.lower() in (".docx", ".xlsx", ".xlsm"):
         with zipfile.ZipFile(path) as archive:

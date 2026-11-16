@@ -228,6 +228,16 @@ def eval_to_json(label, ev):
                     if _is_ineligible_status(v):
                         issues[m["headers"][1 + j]].append(dict(area="Overall result", status=v))
                         not_eligible.add(m["headers"][1 + j])
+    # Some reports list a bidder in the bid-details table but omit that bidder
+    # from one or more compliance matrices. Keep recommendation data complete
+    # for every bidder the report actually names (including Excel output).
+    if ev["bids"]:
+        for row in ev["bids"]["rows"]:
+            bidder = C.clean(row[0]) if row else ""
+            if bidder and bidder not in all_bidders:
+                all_bidders.append(bidder)
+                issues.setdefault(bidder, [])
+                stated_results.setdefault(bidder, [])
     shortlist = dict(eligible=[b for b in all_bidders if b not in not_eligible],
                      excluded=[b for b in all_bidders if b in not_eligible])
     recommendations = [

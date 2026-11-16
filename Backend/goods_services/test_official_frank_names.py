@@ -2,7 +2,7 @@ import unittest
 import tempfile
 from pathlib import Path
 
-from docx import Document
+from docx import Document  # pyright: ignore[reportMissingImports]
 from Backend.goods_services import consolidate
 
 
