@@ -29,6 +29,15 @@ def _clean(s):
     return re.sub(r"\s+", " ", (s or "").replace("\x00", "")).strip()
 
 
+def _is_price_schedule_header(row):
+    """Return whether a PDF table row is a local/foreign price header."""
+    header = " ".join(_clean(cell) for cell in row).casefold()
+    has_description = "description" in header or "descrip" in header
+    has_quantity = "qty" in header or "quantity" in header
+    has_price = any(word in header for word in ("unit price", "fob", "fca", "cif", "cip"))
+    return has_description and has_quantity and has_price
+
+
 def _pdf_content(path):
     """-> (text_lines_outside_tables, tables) ; tables = list of rows (list of str), page order."""
     import pdfplumber
@@ -146,7 +155,11 @@ def _pdf_to_docx(lines, tables, out):
         prev = merged[-1] if merged else None
         same = prev and len(rows[0]) >= 3 and len(prev[0]) == len(rows[0])
         is_hdr = re.search(r"(?i)details required|amendment|evaluation area", " ".join(rows[0]))
-        known = same and not is_hdr and re.search(r"(?i)details required|amendment|evaluation area", " ".join(prev[0]))
+        previous_is_known_table = prev and (
+            re.search(r"(?i)details required|amendment|evaluation area", " ".join(prev[0]))
+            or _is_price_schedule_header(prev[0])
+        )
+        known = same and not is_hdr and not _is_price_schedule_header(rows[0]) and previous_is_known_table
         if same and (known or len(prev) == 1 or [_clean(c) for c in rows[0]] == [_clean(c) for c in prev[0]]):
             if [_clean(c) for c in rows[0]] == [_clean(c) for c in prev[0]]:
                 rows = rows[1:]            # repeated header row

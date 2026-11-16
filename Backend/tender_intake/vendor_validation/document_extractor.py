@@ -1,7 +1,7 @@
-
+import openpyxl
 from pathlib import Path
+from importlib import import_module
 
-from docx import Document
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 from pypdf import PdfReader
@@ -53,7 +53,14 @@ def extract_pdf(file_path):
 def extract_docx(file_path):
     """Extract paragraphs and tables from a Word document."""
 
-    document = Document(str(file_path))
+    try:
+        document_class = import_module("docx").Document
+    except ImportError as exc:
+        raise ImportError(
+            "DOCX extraction requires the 'python-docx' package."
+        ) from exc
+
+    document = document_class(str(file_path))
     sections = []
 
     for index, paragraph in enumerate(document.paragraphs, start=1):
@@ -99,7 +106,7 @@ def extract_excel(file_path):
         keep_links=False,
     )
 
-    value_workbook = load_workbook(
+    value_workbook = openpyxl.load_workbook(
         filename=str(file_path),
         read_only=True,
         data_only=True,
@@ -209,12 +216,13 @@ def extract_excel(file_path):
                     start=1,
                 ):
                     coordinate = (
-                        f"{get_column_letter(column_number)}{row_number}"
+                        f"{openpyxl.utils.get_column_letter(column_number)}"
+                        f"{row_number}"
                     )
 
                     heading = headers.get(
                         column_number,
-                        get_column_letter(column_number),
+                        openpyxl.utils.get_column_letter(column_number),
                     )
 
                     formula = formula_cell.value

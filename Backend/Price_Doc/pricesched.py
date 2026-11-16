@@ -16,10 +16,10 @@ from collections import OrderedDict, defaultdict
 from datetime import date, datetime
 from pathlib import Path
 
-import openpyxl
+import openpyxl  # type: ignore[reportMissingModuleSource]
 from openpyxl.styles import Font, PatternFill, Alignment
-from openpyxl.utils import get_column_letter as L
-from openpyxl.worksheet.datavalidation import DataValidation
+from openpyxl.utils import get_column_letter as L  # type: ignore[reportMissingModuleSource]
+from openpyxl.worksheet.datavalidation import DataValidation  # type: ignore[reportMissingModuleSource]
 
 try:
     from ..goods_services import consolidate as C
@@ -40,7 +40,7 @@ except ImportError:
         T = None
 
 try:
-    import docx
+    import docx  # type: ignore[reportMissingImports]
 except ImportError:                                   # pragma: no cover
     docx = None
 
@@ -589,9 +589,9 @@ ANNEXURE_COLUMN_WIDTHS = {
     22: 18,     # V: Previous Purchased Tender No
     23: 18,     # W: Price (CIF) (USD)
     24: 18,     # X: % of Variation (CIF)
-    25: 18,     # Y: Previous Purchased Tender No
-    26: 18,     # Z: Price (CIF) (USD)
-    27: 18,     # AA: % of Variation (CIF)
+    25: 18,     # Y: reserved/hidden duplicate historical group
+    26: 18,     # Z: reserved/hidden duplicate historical group
+    27: 18,     # AA: reserved/hidden duplicate historical group
     28: 36,     # AB: Remarks
 }
 
@@ -626,7 +626,7 @@ def _usd_rate_pair(rate_date):
 
 
 def _populate_exchange_rates(ws, closing_date=None, po_dates=()):
-    """Fill the template's closing-date and previous-PO-date USD rate cells."""
+    """Fill the closing-date and single previous-PO-date USD rate cells."""
     closing = _report_date(closing_date)
     pair = _usd_rate_pair(closing)
     ws["R4"] = f"1 USD (Tender Closing Date) = {closing.strftime('%d-%m-%y')}" if closing else "1 USD (Tender Closing Date)"
@@ -635,28 +635,34 @@ def _populate_exchange_rates(ws, closing_date=None, po_dates=()):
     closing_average = round(sum(pair) / 2, 4) if pair else None
     ws["U5"] = closing_average
 
-    for header, rate_column, average_one_column, average_two_column, po_date in (
-        ("V4", "V5", "W5", "X5", po_dates[0] if len(po_dates) > 0 else None),
-        ("Y4", "Y5", "Z5", "AA5", po_dates[1] if len(po_dates) > 1 else None),
-    ):
-        parsed = _report_date(po_date)
-        po_pair = _usd_rate_pair(parsed)
-        ws[header] = f"PO Date : {parsed.strftime('%d-%m-%Y')}" if parsed else None
-        po_rate = round(sum(po_pair) / 2, 4) if po_pair else None
-        ws[rate_column] = po_rate
-        if po_rate is None:
-            ws[average_one_column] = None
-            ws[average_two_column] = None
-            continue
+    parsed = _report_date(po_dates[0]) if po_dates else None
+    po_pair = _usd_rate_pair(parsed)
+    ws["V4"] = f"PO Date : {parsed.strftime('%d-%m-%Y')}" if parsed else None
+    po_rate = round(sum(po_pair) / 2, 4) if po_pair else None
+    ws["V5"] = po_rate
+    if po_rate is None:
+        ws["W5"] = None
+        ws["X5"] = None
+    else:
         first_average = round((closing_average + po_rate) / 2, 4) if closing_average is not None else po_rate
-        ws[average_one_column] = first_average
-        ws[average_two_column] = round((po_rate + first_average) / 2, 4)
+        ws["W5"] = first_average
+        ws["X5"] = round((po_rate + first_average) / 2, 4)
+
+    # Y:AA was a second copy of the same Previous Purchased block. Keep the
+    # template columns for compatibility, but never expose or populate them.
+    for cell in ("Y4", "Y5", "Z5", "AA5"):
+        ws[cell] = None
 
 
 def _populate_annexure_sheet(ws, entries, tender="", purchasing="", closing_date=None):
     """Populate one Annexure sheet with one company's extracted prices."""
     rows = _annexure_rows(entries)
     first_row, last_template_row = 9, 80
+
+    # The template contains a second copy of the Previous Purchased group (Y:AA).
+    # Keep it hidden and unused so the generated table has one clear group.
+    for column in ("V", "W", "X", "Y", "Z", "AA"):
+        ws.column_dimensions[column].hidden = column in ("Y", "Z", "AA")
 
     # 1. Update Header with Tender No, Purchasing Details, and database rates
     tender_no = tender or next((e.get("tender") for e in entries if e.get("tender")), "")
@@ -750,7 +756,7 @@ def _populate_annexure_sheet(ws, entries, tender="", purchasing="", closing_date
         if item["kind"] != "local" and item["cif"] is not None and T is not None:
             try:
                 previous = T.previous_purchased(
-                    item["description"], item["cif"], limit=2,
+                    item["description"], item["cif"], limit=1,
                     exclude_tender=tender_no or None,
                 )
             except Exception:
@@ -760,15 +766,11 @@ def _populate_annexure_sheet(ws, entries, tender="", purchasing="", closing_date
                     po_date = _report_date(previous_row.get("po_date"))
                     if po_date and po_date not in previous_po_dates:
                         previous_po_dates.append(po_date)
-                        if len(previous_po_dates) == 2:
+                        if len(previous_po_dates) == 1:
                             break
                 values[22] = previous[0]["tender_no"]
                 values[23] = previous[0]["cif_usd"]
                 values[24] = f"=(K{row}-W{row})/W{row}*100"
-            if len(previous) >= 2:
-                values[25] = previous[1]["tender_no"]
-                values[26] = previous[1]["cif_usd"]
-                values[27] = f"=(K{row}-Z{row})/Z{row}*100"
         for column, value in values.items():
             cell = ws.cell(row, column)
             cell.value = _annexure_value(value)
