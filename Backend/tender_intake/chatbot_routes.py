@@ -36,7 +36,9 @@ if str(BACKEND_DIR) not in sys.path:
 
 from rag_chatbot.compliance_analyzer import (
     analyze_compliance,
+    extract_status_declarations,
     get_chart_data,
+    process_status_declarations,
 )
 
 
@@ -158,9 +160,20 @@ def make_compliance_visualization(submission_id):
         "title": "Vendor Compliance Analysis",
         "analysis_complete": analysis["analysis_complete"],
         "summary": analysis["summary"],
+        "declaration_summary": analysis["declaration_summary"],
         "chart_data": get_chart_data(analysis),
         "clauses": analysis["clauses"],
+        "clause_count": analysis["clause_count"],
+        "matched_clause_count": analysis["matched_clause_count"],
+        "clause_matching_performed": analysis["clause_matching_performed"],
+        "declarations": analysis["declarations"],
+        "raw_declarations": analysis["raw_declarations"],
+        "validated_declarations": analysis["validated_declarations"],
+        "ambiguous_declaration_lines": analysis["ambiguous_declaration_lines"],
+        "ambiguous_declaration_line_count": analysis["ambiguous_declaration_line_count"],
         "declaration_count": analysis["declaration_count"],
+        "declaration_counts_available": analysis["declaration_counts_available"],
+        "declaration_counts_complete": analysis["declaration_counts_complete"],
         "warnings": analysis["warnings"],
         "notice": analysis["notice"],
     }, None
@@ -180,15 +193,33 @@ def build_submission_comparison(submissions):
         "Bid/performance security": r"\b(bid security|bid bond|performance security|bank guarantee|security amount)\b",
         "Compliance declarations": r"\b(complied|not complied|partially complied|compliance)\b",
     }
+
     for index, (submission_id, extraction) in enumerate(submissions, 1):
+        extraction = extraction if isinstance(extraction, dict) else {}
         evidence = [item for item in extraction.get("evidence", []) if isinstance(item, dict)]
         try:
             analysis = analyze_compliance(evidence) if evidence else None
         except ValueError:
             analysis = None
-        if analysis is None:
-            warnings.append(f"Submission {index}: no extracted evidence is available.")
-            continue
+        declaration_processing = process_status_declarations(
+            extract_status_declarations(evidence)
+        )
+        statuses = declaration_processing["counts"]
+        declaration_count = declaration_processing["total_declarations"]
+        ambiguous_lines = declaration_processing["ambiguous_declaration_lines"]
+        ambiguous_declaration_lines = declaration_processing["ambiguous_line_count"]
+        extraction_errors = extraction.get("extraction_errors") or []
+        has_ocr = any(item.get("requires_ocr") for item in evidence)
+        counts_available = declaration_processing["counts_available"]
+        counts_complete = counts_available and not extraction_errors and not has_ocr and not ambiguous_declaration_lines
+        if not evidence:
+            warnings.append(f"Submission {index}: no extracted evidence is available; compliance counts are unavailable.")
+        elif not declaration_count:
+            warnings.append(f"Submission {index}: no unambiguous compliance declarations were extracted; a zero-count graph was suppressed.")
+        if ambiguous_declaration_lines:
+            warnings.append(f"Submission {index}: {ambiguous_declaration_lines} declaration line(s) contain conflicting statuses and were excluded from counts.")
+        if extraction_errors:
+            warnings.append(f"Submission {index}: {len(extraction_errors)} file(s) failed extraction; available declaration counts may be incomplete.")
         names = sorted({item.get("file_name", "Unknown document") for item in evidence})
         intelligence = load_existing_intelligence(session.get("contractwise_workspace_id")) if session.get("contractwise_workspace_id") else None
         identified = set()
@@ -217,30 +248,64 @@ def build_submission_comparison(submissions):
             for match in re.finditer(r"\b(\d+(?:\.\d+)?)\s*(days?|weeks?)\b", item["text"], re.I):
                 value = float(match.group(1)) * (7 if match.group(2).lower().startswith("week") else 1)
                 delivery_values.append({"value": value, "source": item})
-        clauses = analysis.get("clauses", [])
-        if any(item.get("requires_ocr") for item in evidence if isinstance(item, dict)):
+        if has_ocr:
             warnings.append(f"Submission {index}: OCR-dependent evidence may be incomplete.")
-        if not analysis.get("analysis_complete"):
-            warnings.append(f"Submission {index}: compliance declarations could not all be matched with certainty.")
+        if analysis and not analysis.get("analysis_complete"):
+            warnings.append(f"Submission {index}: clause-to-declaration matching is incomplete; graph counts use extracted declaration records independently.")
         if vendor_identity != "Not verified" and "Ambiguous" in vendor_identity:
             warnings.append(f"Submission {index}: vendor identity is ambiguous and requires review.")
+        chart_label = f"Submission {index} — {vendor_identity} ({', '.join(names) or 'documents'})"
+        clauses = analysis.get("clauses", []) if analysis else []
         results.append({
             "label": f"Submission {index}",
+            "chart_label": chart_label,
             "submission_id": submission_id,
             "vendor_identity": vendor_identity,
             "documents": names,
             "topic_evidence": topic_evidence,
             "delivery_values": delivery_values,
+            # Retain the legacy clause-matched counts field for API consumers.
             "counts": {status: sum(1 for clause in clauses if clause.get("vendor_status") == status) for status in ("Complied", "Partially Complied", "Not Complied", "Not Specified")},
+            # These are the independent declaration counts used by the comparison graph.
+            "declaration_counts": (statuses if counts_available else None),
+            "declaration_count": declaration_count if counts_available else None,
+            "raw_declarations": declaration_processing["raw_declarations"],
+            "validated_declarations": declaration_processing["valid_declarations"],
+            "ambiguous_declaration_lines": ambiguous_lines,
+            "ambiguous_declaration_line_count": ambiguous_declaration_lines,
+            "comparison_counts": ({
+                "Complied": statuses["Complied"],
+                "Non-Complied": statuses["Not Complied"] + statuses["Partially Complied"],
+            } if counts_available else None),
+            "counts_available": counts_available,
+            "counts_complete": counts_complete,
         })
     if len(results) < 2:
         warnings.append("At least two valid submissions are needed for a cross-submission comparison.")
-    warnings.append("Topic matches are extracted evidence excerpts, not verified values or compliance decisions. Missing mentions are shown as Not found and are not proof of non-compliance.")
+    notice = (
+        "Topic matches are extracted evidence excerpts, not verified values or "
+        "compliance decisions. Missing mentions are shown as Not found and are "
+        "not proof of non-compliance."
+    )
     if len(results) >= 2 and all(len(item["delivery_values"]) == 1 for item in results):
         metrics["delivery_days"] = [{"label": item["label"], "value": item["delivery_values"][0]["value"]} for item in results]
     else:
         warnings.append("Delivery values were not charted because one or more submissions had missing or multiple candidate values.")
-    return {"submissions": results, "topics": list(topics), "statuses": ["Complied", "Partially Complied", "Not Complied", "Not Specified"], "metrics": metrics, "warnings": warnings, "complete": len(results) == len(submissions) and len(results) >= 2 and not warnings}
+    chart_available = len(results) >= 2 and all(item["counts_available"] for item in results)
+    compliance_chart = {
+        "available": chart_available,
+        "complete": chart_available and all(item["counts_complete"] for item in results),
+        "labels": [item["chart_label"] for item in results] if chart_available else [],
+        "datasets": ([
+            {"label": "Complied", "data": [item["comparison_counts"]["Complied"] for item in results], "backgroundColor": "#16A34A"},
+            {"label": "Non-Complied", "data": [item["comparison_counts"]["Non-Complied"] for item in results], "backgroundColor": "#DC2626"},
+        ] if chart_available else []),
+        "x_axis_label": "Submission / Vendor",
+        "y_axis_label": "Compliance declarations",
+    }
+    if len(results) >= 2 and not chart_available:
+        warnings.append("Compliance comparison graph was suppressed because at least one submission has unavailable declaration counts.")
+    return {"submissions": results, "topics": list(topics), "statuses": ["Complied", "Partially Complied", "Not Complied", "Not Specified"], "metrics": metrics, "compliance_chart": compliance_chart, "warnings": warnings, "notice": notice, "complete": len(results) == len(submissions) and len(results) >= 2 and not warnings}
 
 
 
@@ -730,9 +795,20 @@ def chatbot_visualize():
             "title": "Vendor Compliance Analysis",
             "analysis_complete": analysis["analysis_complete"],
             "summary": analysis["summary"],
+            "declaration_summary": analysis["declaration_summary"],
             "chart_data": chart_data,
             "clauses": analysis["clauses"],
+            "clause_count": analysis["clause_count"],
+            "matched_clause_count": analysis["matched_clause_count"],
+            "clause_matching_performed": analysis["clause_matching_performed"],
+            "declarations": analysis["declarations"],
+            "raw_declarations": analysis["raw_declarations"],
+            "validated_declarations": analysis["validated_declarations"],
+            "ambiguous_declaration_lines": analysis["ambiguous_declaration_lines"],
+            "ambiguous_declaration_line_count": analysis["ambiguous_declaration_line_count"],
             "declaration_count": analysis["declaration_count"],
+            "declaration_counts_available": analysis["declaration_counts_available"],
+            "declaration_counts_complete": analysis["declaration_counts_complete"],
             "warnings": analysis["warnings"],
             "notice": analysis["notice"],
         }), 200

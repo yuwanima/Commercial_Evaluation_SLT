@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="index.css">
 </head>
 <body>
-<header><div class="wrap"><h1>Commericial Evaluation</h1><a class="robot-display header-robot" href="/chatbot" aria-label="Open ComOps chatbot" title="Open ComOps chatbot"><img class="robot-art" src="/chatbot.jpg" alt="SLT ComOps robot"></a></div></header>
+<header><div class="wrap"><h1>Commericial Evaluation</h1><a id="comops-launcher" class="robot-display header-robot" href="/chatbot" aria-label="Open ComOps chatbot" aria-haspopup="dialog" aria-controls="comops-panel" aria-expanded="false" title="Open ComOps chatbot"><img class="robot-art" src="/chatbot.jpg" alt="SLT ComOps robot"></a></div></header>
 <main><div class="wrap">
   <nav class="tabs" role="tablist"><button type="button" class="on" data-tab="all" role="tab">Technical Evaluation Reports / GCC & SCC Compliance Reports / Price Documents</button></nav>
   <div class="panel" id="p-all">
@@ -18,6 +18,21 @@
     <div class="actions"><button class="btn go" type="button">Process all documents</button></div><div class="out"></div>
   </div>
 </div></main>
+<aside id="comops-panel" class="comops-panel" role="dialog" aria-labelledby="comops-panel-title" aria-hidden="true">
+  <div class="comops-panel-toolbar">
+    <span id="comops-panel-title">ComOps</span>
+    <div class="comops-panel-controls">
+      <button id="comops-expand" class="comops-panel-control" type="button" aria-label="Maximize ComOps panel" title="Maximize panel" aria-pressed="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H4v4M16 4h4v4M4 16v4h4M20 16v4h-4" /></svg>
+      </button>
+      <button id="comops-close" class="comops-panel-control" type="button" aria-label="Close ComOps panel" title="Close panel">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
+      </button>
+    </div>
+  </div>
+  <div id="comops-resize-handle" class="comops-resize-handle" role="separator" aria-label="Resize ComOps panel" aria-orientation="vertical" aria-valuemin="360" aria-valuemax="900" aria-valuenow="520" tabindex="0"></div>
+  <iframe id="comops-frame" class="comops-frame" title="ComOps SLT Procurement Assistant" data-src="/chatbot" loading="lazy"></iframe>
+</aside>
 <script src="index.js"></script>
 </body>
 </html>

@@ -48,15 +48,31 @@ def process_submission(files, category=None):
                     "requires_ocr": section.get("requires_ocr", False),
                 })
 
-        except Exception:
-            file_result = {
-                "file_name": file_metadata["original_name"],
-                "status": "extraction_failed",
-                "error": (
+        except Exception as error:
+            if file_metadata.get("extension") == ".doc":
+                if "LibreOffice is needed" in str(error):
+                    extraction_error = (
+                        "Legacy .doc extraction requires LibreOffice, which is not "
+                        "available on this application host. The original file was "
+                        "retained, but this document was not analysed. Save it as "
+                        ".docx or provide LibreOffice to the application host."
+                    )
+                else:
+                    extraction_error = (
+                        "The legacy .doc could not be converted or extracted. The "
+                        "original file was retained, but this document was not analysed."
+                    )
+            else:
+                extraction_error = (
                     "Unable to extract this document. "
                     "It may be corrupted, password-protected "
                     "or unsupported."
-                ),
+                )
+
+            file_result = {
+                "file_name": file_metadata["original_name"],
+                "status": "extraction_failed",
+                "error": extraction_error,
                 "section_count": 0,
                 "sections": [],
             }

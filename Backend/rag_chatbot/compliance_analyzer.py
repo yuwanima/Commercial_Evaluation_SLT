@@ -31,7 +31,7 @@ SUPPORTED_STATUSES = (
 )
 
 STATUS_PATTERN = re.compile(
-    r"\b(Partially\s+Complied|Not\s+Complied|Complied)\b",
+    r"(?<![\w-])(Partially[\s\W_]+Complied|Not[\s\W_]+Complied|Complied)\b",
     re.IGNORECASE,
 )
 
@@ -89,7 +89,7 @@ def normalise_status(value: str) -> str | None:
     if not value:
         return None
 
-    value = re.sub(r"\s+", " ", value.strip().lower())
+    value = " ".join(re.findall(r"[a-z]+", value.lower()))
 
     if value == "partially complied":
         return "Partially Complied"
@@ -240,10 +240,85 @@ def extract_status_declarations(evidence: list[dict]) -> list[dict]:
                     "status": status,
                     "source": source,
                     "line_number": line_index + 1,
+                    "match_start": match.start(),
+                    "match_end": match.end(),
                     "original_text": line,
                 })
 
     return declarations
+
+
+def process_status_declarations(declarations: list[dict]) -> dict:
+    """Normalize and validate extracted declarations by source line.
+
+    Raw extraction records are retained for audit. Each unambiguous source
+    line contributes at most one declaration; conflicting lines are excluded.
+    """
+
+    raw_declarations = [
+        dict(item) for item in declarations if isinstance(item, dict)
+    ]
+    deduplicated = []
+    seen = set()
+
+    for declaration in raw_declarations:
+        status = normalise_status(declaration.get("status"))
+        if status is None:
+            continue
+        source = declaration.get("source")
+        source = source if isinstance(source, dict) else {}
+        file_name = source.get("file_name") or "Unknown file"
+        location = source.get("location") or "Unknown location"
+        line_number = declaration.get("line_number")
+        original_text = declaration.get("original_text") or ""
+        key = (file_name, location, line_number, original_text, status)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduplicated.append({
+            **declaration,
+            "status": status,
+            "source": {**source, "file_name": file_name, "location": location},
+        })
+
+    grouped = {}
+    for declaration in deduplicated:
+        source = declaration["source"]
+        line_key = (
+            source["file_name"], source["location"],
+            declaration.get("line_number"), declaration.get("original_text") or "",
+        )
+        grouped.setdefault(line_key, []).append(declaration)
+
+    valid_declarations = []
+    ambiguous_declaration_lines = []
+    counts = {status: 0 for status in ("Complied", "Partially Complied", "Not Complied")}
+    for line_declarations in grouped.values():
+        statuses = sorted({item["status"] for item in line_declarations})
+        if len(statuses) > 1:
+            first = line_declarations[0]
+            ambiguous_declaration_lines.append({
+                "source": first["source"],
+                "line_number": first.get("line_number"),
+                "original_text": first.get("original_text", ""),
+                "statuses": statuses,
+                "declarations": line_declarations,
+            })
+            continue
+        declaration = line_declarations[0]
+        valid_declarations.append(declaration)
+        counts[declaration["status"]] += 1
+
+    return {
+        "raw_declarations": raw_declarations,
+        "deduplicated_declarations": deduplicated,
+        "valid_declarations": valid_declarations,
+        "ambiguous_declaration_lines": ambiguous_declaration_lines,
+        "ambiguous_line_count": len(ambiguous_declaration_lines),
+        "counts": counts,
+        "total_declarations": len(valid_declarations),
+        "counts_available": bool(valid_declarations),
+    }
 
 
 
@@ -254,6 +329,7 @@ def extract_status_declarations(evidence: list[dict]) -> list[dict]:
 def match_statuses_to_clauses(
     clauses: list[dict],
     declarations: list[dict],
+    ambiguous_declaration_lines: list[dict] | None = None,
 ) -> tuple[list[dict], list[str]]:
     """
     Match declarations to clauses by document order.
@@ -266,6 +342,13 @@ def match_statuses_to_clauses(
     """
 
     warnings = []
+
+    if ambiguous_declaration_lines:
+        warnings.append(
+            f"{len(ambiguous_declaration_lines)} compliance declaration line(s) "
+            "contain conflicting statuses. Automatic status matching was not performed."
+        )
+        return clauses, warnings
 
     if not clauses:
         warnings.append(
@@ -344,6 +427,54 @@ def calculate_summary(clauses: list[dict]) -> dict:
     }
 
 
+def calculate_declaration_summary(
+    declarations: list[dict],
+    *,
+    counts_available: bool | None = None,
+    counts_complete: bool | None = None,
+    ambiguous_line_count: int = 0,
+) -> dict:
+    """Count extracted vendor declarations without requiring clause matching."""
+
+    processing = process_status_declarations(declarations)
+    declarations = processing["valid_declarations"]
+    if counts_available is None:
+        counts_available = processing["counts_available"]
+    if ambiguous_line_count == 0:
+        ambiguous_line_count = processing["ambiguous_line_count"]
+
+    counts = Counter(
+        status
+        for declaration in declarations
+        if (status := normalise_status(declaration.get("status"))) is not None
+    )
+    total = sum(counts.get(status, 0) for status in SUPPORTED_STATUSES)
+    available = bool(total) if counts_available is None else bool(counts_available)
+    complete = (
+        available and ambiguous_line_count == 0
+        if counts_complete is None
+        else bool(counts_complete)
+    )
+    breakdown = {
+        status: {
+            "count": counts.get(status, 0),
+            "percentage": round(counts.get(status, 0) * 100 / total, 2) if total else 0,
+        }
+        for status in ("Complied", "Partially Complied", "Not Complied")
+    }
+
+    return {
+        "total_declarations": total,
+        "complied": counts.get("Complied", 0),
+        "partially_complied": counts.get("Partially Complied", 0),
+        "not_complied": counts.get("Not Complied", 0),
+        "breakdown": breakdown,
+        "counts_available": available,
+        "counts_complete": complete,
+        "ambiguous_line_count": ambiguous_line_count,
+    }
+
+
 # ---------------------------------------------------------------------
 # Main analysis function
 # ---------------------------------------------------------------------
@@ -395,12 +526,22 @@ def analyze_compliance(evidence: list[dict]) -> dict:
     clauses, duplicate_numbers = extract_clauses(valid_evidence)
 
     declarations = extract_status_declarations(valid_evidence)
+    declaration_processing = process_status_declarations(declarations)
+    validated_declarations = declaration_processing["valid_declarations"]
+    ambiguous_declaration_lines = declaration_processing["ambiguous_declaration_lines"]
 
-    # Match statuses only if the counts agree.
+    # Match statuses only when counts agree and no line is ambiguous.
     clauses, warnings = match_statuses_to_clauses(
         clauses,
-        declarations,
+        validated_declarations,
+        ambiguous_declaration_lines,
     )
+
+    if ambiguous_declaration_lines:
+        warnings.append(
+            f"{len(ambiguous_declaration_lines)} ambiguous compliance declaration "
+            "line(s) were excluded from valid declaration counts."
+        )
 
     if duplicate_numbers:
         warnings.append(
@@ -414,19 +555,39 @@ def analyze_compliance(evidence: list[dict]) -> dict:
             "Compliance analysis may be incomplete."
         )
 
-    if not declarations:
+    if not validated_declarations:
         warnings.append(
-            "No compliance declarations were identified."
+            "No unambiguous compliance declarations were identified."
         )
 
     summary = calculate_summary(clauses)
+    counts_complete = (
+        declaration_processing["counts_available"]
+        and not ambiguous_declaration_lines
+        and not ocr_required_sources
+    )
+    declaration_summary = calculate_declaration_summary(
+        validated_declarations,
+        counts_available=declaration_processing["counts_available"],
+        counts_complete=counts_complete,
+        ambiguous_line_count=len(ambiguous_declaration_lines),
+    )
+    clause_matching_performed = (
+        bool(clauses)
+        and not ambiguous_declaration_lines
+        and len(clauses) == len(validated_declarations)
+    )
+    matched_clause_count = sum(
+        clause.get("vendor_status") in SUPPORTED_STATUSES
+        for clause in clauses
+    )
 
     # Determine whether the analysis can be considered complete.
     analysis_complete = (
-        bool(clauses)
-        and len(clauses) == len(declarations)
+        clause_matching_performed
         and not duplicate_numbers
         and not ocr_required_sources
+        and not ambiguous_declaration_lines
         and all(
           clause.get("vendor_status", "Not Specified") != "Not Specified"
           for clause in clauses
@@ -437,9 +598,24 @@ def analyze_compliance(evidence: list[dict]) -> dict:
     return {
         "analysis_type": "vendor_declared_compliance",
         "analysis_complete": analysis_complete,
+        # Keep clause results and extracted declarations separate. Clause-level
+        # matching can be unavailable even when declaration counts are valid.
         "summary": summary,
+        "declaration_summary": declaration_summary,
         "clauses": clauses,
-        "declaration_count": len(declarations),
+        "clause_count": len(clauses),
+        "matched_clause_count": matched_clause_count,
+        "clause_matching_performed": clause_matching_performed,
+        # Preserve the original extraction records, and expose validated
+        # records and ambiguous lines separately for audit and UI consumers.
+        "declarations": declarations,
+        "raw_declarations": declaration_processing["raw_declarations"],
+        "validated_declarations": validated_declarations,
+        "ambiguous_declaration_lines": ambiguous_declaration_lines,
+        "ambiguous_declaration_line_count": len(ambiguous_declaration_lines),
+        "declaration_count": len(validated_declarations),
+        "declaration_counts_available": declaration_processing["counts_available"],
+        "declaration_counts_complete": counts_complete,
         "duplicate_clause_numbers": duplicate_numbers,
         "ocr_required_sources": ocr_required_sources,
         "warnings": warnings,
@@ -462,17 +638,24 @@ def get_chart_data(analysis_result: dict) -> dict:
     The frontend can use these values with Chart.js.
     """
 
-    summary = analysis_result.get("summary", {})
-    breakdown = summary.get("breakdown", {})
-
-    chart_statuses = [
-        "Complied",
-        "Not Complied",
-        "Partially Complied",
-        "Not Specified",
-        "Unclear",
-        "OCR Required",
-    ]
+    declaration_summary = analysis_result.get("declaration_summary")
+    if declaration_summary is not None:
+        breakdown = declaration_summary.get("breakdown", {})
+        chart_statuses = ("Complied", "Partially Complied", "Not Complied")
+        total = declaration_summary.get("total_declarations", 0)
+        counts_available = declaration_summary.get("counts_available", total > 0)
+        counts_complete = declaration_summary.get("counts_complete", counts_available)
+    else:
+        # Backward-compatible fallback for callers with older analysis payloads.
+        summary = analysis_result.get("summary", {})
+        breakdown = summary.get("breakdown", {})
+        chart_statuses = (
+            "Complied", "Not Complied", "Partially Complied",
+            "Not Specified", "Unclear", "OCR Required",
+        )
+        total = summary.get("total_clauses", 0)
+        counts_available = total > 0
+        counts_complete = counts_available
 
     labels = []
     counts = []
@@ -481,7 +664,13 @@ def get_chart_data(analysis_result: dict) -> dict:
     for status in chart_statuses:
         count = breakdown.get(status, {}).get("count", 0)
 
-        # Do not include zero-count categories in the graph.
+        # Keep the three declaration categories visible (including zeroes),
+        # but do not show an empty graph when no declarations were extracted.
+        if declaration_summary is not None and total > 0:
+            labels.append(status)
+            counts.append(count)
+            percentages.append(breakdown.get(status, {}).get("percentage", 0))
+            continue
         if count == 0:
             continue
 
@@ -495,4 +684,8 @@ def get_chart_data(analysis_result: dict) -> dict:
         "labels": labels,
         "counts": counts,
         "percentages": percentages,
+        "basis": "extracted_compliance_declarations" if declaration_summary is not None else "matched_clause_statuses",
+        "total": total,
+        "available": counts_available,
+        "complete": counts_complete,
     }

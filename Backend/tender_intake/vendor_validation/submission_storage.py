@@ -25,6 +25,7 @@ STORAGE_DIR = BASE_DIR / "storage" / "vendor_submissions"
 
 ALLOWED_EXTENSIONS = {
     ".pdf",
+    ".doc",
     ".docx",
     ".xlsx",
     ".xlsm",

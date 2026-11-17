@@ -1,4 +1,4 @@
-document.addEventListener("DOMContentLoaded", () => {
+﻿document.addEventListener("DOMContentLoaded", () => {
     // Existing question-and-answer elements
     const form = document.getElementById("chatbot-form");
     const questionInput = document.getElementById("question");
@@ -37,21 +37,23 @@ const visualizationNotice =
 let complianceDoughnutChart = null;
 let complianceBarChart = null;
 
-    // Vendor upload elements
-    const uploadForm = document.getElementById("upload-form");
+    // Vendor document attachment elements
     const fileInput = document.getElementById("vendor-files");
-    const uploadButton = document.getElementById("upload-button");
-    const uploadLoading = document.getElementById("upload-loading");
-    const uploadError = document.getElementById("upload-error");
-    const uploadResult = document.getElementById("upload-result");
-    const selectedFiles = document.getElementById("selected-files");
-    const uploadFileCount = document.getElementById("upload-file-count");
+    const attachmentList = document.getElementById("attachment-list");
+    const attachmentError = document.getElementById("attachment-error");
 
     const questionEndpoint = form.dataset.endpoint;
-    const uploadEndpoint = uploadForm?.dataset.endpoint;
+    const uploadEndpoint = form.dataset.uploadEndpoint;
     // Keep the currently active vendor document submission.
     let activeSubmissionId = null;
     let isProcessing = false;
+    let selectedAttachments = [];
+    let pendingAttachmentUpload = null;
+
+    const allowedExtensions = new Set([".pdf", ".doc", ".docx", ".xlsx", ".xlsm"]);
+    const maxFiles = 20;
+    const maxFileSize = 10 * 1024 * 1024;
+    const maxTotalSize = 50 * 1024 * 1024;
 
     // Existing question character counter
     questionInput.addEventListener("input", () => {
@@ -64,7 +66,7 @@ let complianceBarChart = null;
     questionInput.addEventListener("keydown", (event) => {
         if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
             event.preventDefault();
-            if (!isProcessing && questionInput.value.trim()) form.requestSubmit();
+            if (!isProcessing && (questionInput.value.trim() || selectedAttachments.length)) form.requestSubmit();
         }
     });
 
@@ -84,6 +86,8 @@ let complianceBarChart = null;
         questionCount.textContent = "0 / 5000";
         errorMessage.classList.add("hidden");
         loading.classList.add("hidden");
+        clearSelectedAttachments();
+        pendingAttachmentUpload = null;
         visualizationContainer.classList.add("hidden");
         if (visualizationContainer.parentElement !== answerSection) {
             answerSection.appendChild(visualizationContainer);
@@ -94,11 +98,101 @@ let complianceBarChart = null;
     });
 
     function updateSendButton() {
-        askButton.disabled = isProcessing || !questionInput.value.trim();
+        askButton.disabled = isProcessing || (!questionInput.value.trim() && selectedAttachments.length === 0);
         newChatButton.disabled = isProcessing;
+        fileInput.disabled = isProcessing;
     }
 
     updateSendButton();
+
+    fileInput.addEventListener("change", () => {
+        const additions = [];
+        const messages = [];
+        const knownNames = new Set(selectedAttachments.map(file => file.name.toLocaleLowerCase()));
+        let totalSize = selectedAttachments.reduce((total, file) => total + file.size, 0);
+
+        Array.from(fileInput.files || []).forEach((file) => {
+            const extension = file.name.substring(file.name.lastIndexOf(".")).toLowerCase();
+            const normalizedName = file.name.toLocaleLowerCase();
+
+            if (!allowedExtensions.has(extension)) {
+                messages.push(`${file.name}: choose a PDF, DOC, DOCX, XLSX or XLSM file.`);
+                return;
+            }
+            if (file.size === 0) {
+                messages.push(`${file.name}: the file is empty.`);
+                return;
+            }
+            if (file.size > maxFileSize) {
+                messages.push(`${file.name}: each file must be 10 MB or smaller.`);
+                return;
+            }
+            if (knownNames.has(normalizedName)) {
+                messages.push(`${file.name}: this filename is already attached.`);
+                return;
+            }
+            if (selectedAttachments.length + additions.length >= maxFiles) {
+                messages.push(`You can attach a maximum of ${maxFiles} files.`);
+                return;
+            }
+            if (totalSize + file.size > maxTotalSize) {
+                messages.push("The combined attachment size cannot exceed 50 MB.");
+                return;
+            }
+
+            additions.push(file);
+            knownNames.add(normalizedName);
+            totalSize += file.size;
+        });
+
+        selectedAttachments = selectedAttachments.concat(additions);
+        fileInput.value = "";
+        renderAttachments();
+        showAttachmentValidation(messages.join(" "));
+        updateSendButton();
+    });
+
+    function renderAttachments() {
+        attachmentList.replaceChildren();
+        attachmentList.classList.toggle("hidden", selectedAttachments.length === 0);
+
+        selectedAttachments.forEach((file, index) => {
+            const chip = document.createElement("div");
+            chip.className = "attachment-chip";
+            const type = document.createElement("span");
+            type.className = "attachment-type";
+            type.setAttribute("aria-hidden", "true");
+            type.textContent = file.name.substring(file.name.lastIndexOf(".") + 1).toUpperCase();
+            const name = document.createElement("span");
+            name.className = "attachment-name";
+            name.textContent = file.name;
+            name.title = `${file.name} (${(file.size / (1024 * 1024)).toFixed(2)} MB)`;
+            const remove = document.createElement("button");
+            remove.type = "button";
+            remove.className = "attachment-remove";
+            remove.setAttribute("aria-label", `Remove ${file.name}`);
+            remove.textContent = "×";
+            remove.addEventListener("click", () => {
+                selectedAttachments.splice(index, 1);
+                renderAttachments();
+                updateSendButton();
+            });
+            chip.append(type, name, remove);
+            attachmentList.appendChild(chip);
+        });
+    }
+
+    function showAttachmentValidation(message) {
+        attachmentError.textContent = message;
+        attachmentError.classList.toggle("hidden", !message);
+    }
+
+    function clearSelectedAttachments() {
+        selectedAttachments = [];
+        fileInput.value = "";
+        renderAttachments();
+        showAttachmentValidation("");
+    }
 
     function appendCopyAction(target, textToCopy) {
         const actions = document.createElement("div");
@@ -120,12 +214,25 @@ let complianceBarChart = null;
         target.appendChild(actions);
     }
 
-    function appendUserMessage(text) {
+    function appendUserMessage(text, files = []) {
         const row = document.createElement("article");
         row.className = "message-row user-message";
         const bubble = document.createElement("div");
         bubble.className = "message-bubble";
-        bubble.textContent = text;
+        const messageText = document.createElement("p");
+        messageText.className = "user-message-text";
+        messageText.textContent = text;
+        bubble.appendChild(messageText);
+        if (files.length) {
+            const fileList = document.createElement("ul");
+            fileList.className = "message-attachments";
+            files.forEach((file) => {
+                const item = document.createElement("li");
+                item.textContent = file.name;
+                fileList.appendChild(item);
+            });
+            bubble.appendChild(fileList);
+        }
         const avatar = document.createElement("div");
         avatar.className = "user-avatar";
         avatar.setAttribute("aria-hidden", "true");
@@ -149,11 +256,17 @@ let complianceBarChart = null;
         return bubble;
     }
 
-    function appendTypingIndicator() {
+    function appendTypingIndicator(message = "ComOps is thinking…") {
         const bubble = createAssistantMessage();
         bubble.classList.add("typing-bubble");
-        bubble.setAttribute("aria-label", "ComOps is thinking");
-        bubble.innerHTML = '<span></span><span></span><span></span>';
+        bubble.setAttribute("aria-label", message);
+        const label = document.createElement("span");
+        label.className = "typing-label";
+        label.textContent = message;
+        bubble.appendChild(label);
+        for (let index = 0; index < 3; index += 1) {
+            bubble.appendChild(document.createElement("span"));
+        }
         scrollConversationToEnd();
         return bubble.closest(".message-row");
     }
@@ -177,7 +290,9 @@ let complianceBarChart = null;
 form.addEventListener("submit", async (event) => {
     event.preventDefault();
 
-    const question = questionInput.value.trim();
+    const attachments = selectedAttachments.slice();
+    const question = questionInput.value.trim() ||
+        (attachments.length ? "Please analyse the attached vendor documents." : "");
 
     if (!question) {
         showError("Please enter a procurement question.");
@@ -188,11 +303,63 @@ form.addEventListener("submit", async (event) => {
     isProcessing = true;
     updateSendButton();
     welcomeScreen.classList.add("hidden");
-    appendUserMessage(question);
-    const typingIndicator = appendTypingIndicator();
+    appendUserMessage(question, attachments);
+    let typingIndicator = appendTypingIndicator(
+        attachments.length ? "Uploading and processing your vendor documents…" : "ComOps is thinking…"
+    );
     errorMessage.classList.add("hidden");
 
     try {
+        if (attachments.length) {
+            let uploadData;
+            const canReuseUpload = pendingAttachmentUpload &&
+                pendingAttachmentUpload.category === (categoryInput.value || "") &&
+                pendingAttachmentUpload.files.length === attachments.length &&
+                pendingAttachmentUpload.files.every((file, index) => file === attachments[index]);
+
+            if (canReuseUpload) {
+                uploadData = pendingAttachmentUpload.data;
+            } else {
+                const formData = new FormData();
+                attachments.forEach((file) => formData.append("files", file));
+                formData.append("category", categoryInput.value || "");
+
+                const uploadResponse = await fetch(uploadEndpoint, {
+                    method: "POST",
+                    body: formData
+                });
+                try {
+                    uploadData = await uploadResponse.json();
+                } catch {
+                    throw new Error("The document upload service returned an unreadable response.");
+                }
+                if (!uploadResponse.ok) {
+                    throw new Error(uploadData.error || "Unable to upload the documents.");
+                }
+                if (!uploadData.submission_id) {
+                    throw new Error("The upload completed without a submission ID. Please try again.");
+                }
+            }
+
+            activeSubmissionId = uploadData.submission_id;
+            const processedFiles = Number(uploadData.summary?.files_processed ?? 0);
+            if (processedFiles === 0) {
+                typingIndicator.remove();
+                displayUploadResult(uploadData);
+                pendingAttachmentUpload = null;
+                throw new Error("No attached documents could be extracted. Check the file status and try again.");
+            }
+
+            pendingAttachmentUpload = {
+                files: attachments,
+                category: categoryInput.value || "",
+                data: uploadData
+            };
+            typingIndicator.remove();
+            displayUploadResult(uploadData);
+            typingIndicator = appendTypingIndicator("Reviewing the uploaded evidence…");
+        }
+
         // Route compliance graph requests to the Python analyzer.
         if (
             isComplianceVisualizationRequest(question) &&
@@ -250,7 +417,7 @@ form.addEventListener("submit", async (event) => {
             }
 
             if (data.comparison) {
-                displayComparison(data);
+                displayComparison(data, question);
             } else {
                 displayAnswer(data);
             }
@@ -259,6 +426,10 @@ form.addEventListener("submit", async (event) => {
         questionInput.value = "";
         questionInput.style.height = "auto";
         questionCount.textContent = "0 / 5000";
+        if (attachments.length) {
+            clearSelectedAttachments();
+            pendingAttachmentUpload = null;
+        }
 
     } catch (error) {
         appendAssistantText(error.message || "I couldn’t complete that request. Please try again.", true);
@@ -269,115 +440,6 @@ form.addEventListener("submit", async (event) => {
         updateSendButton();
     }
 
-    });
-
-    // Display selected vendor files
-    fileInput?.addEventListener("change", () => {
-        const files = Array.from(fileInput.files);
-
-        uploadFileCount.textContent =
-            `${files.length} file${files.length === 1 ? "" : "s"} selected`;
-
-        if (files.length === 0) {
-            selectedFiles.textContent = "No files selected.";
-            return;
-        }
-
-        selectedFiles.replaceChildren();
-
-        files.forEach((file) => {
-            const item = document.createElement("div");
-            item.textContent =
-                `${file.name} (${(file.size / (1024 * 1024)).toFixed(2)} MB)`;
-            selectedFiles.appendChild(item);
-        });
-    });
-
-    // Vendor document upload and processing
-    uploadForm?.addEventListener("submit", async (event) => {
-        event.preventDefault();
-
-        const files = Array.from(fileInput.files);
-
-        if (files.length === 0) {
-            showUploadError("Please select at least one document.");
-            return;
-        }
-
-        if (files.length > 20) {
-            showUploadError("You can upload a maximum of 20 files.");
-            return;
-        }
-
-        const allowedExtensions = [".pdf", ".docx", ".xlsx", ".xlsm"];
-        const totalSize = files.reduce((total, file) => total + file.size, 0);
-
-        for (const file of files) {
-            const extension = file.name.substring(file.name.lastIndexOf(".")).toLowerCase();
-
-            if (!allowedExtensions.includes(extension)) {
-                showUploadError(`Unsupported file type: ${file.name}`);
-                return;
-            }
-
-            if (file.size > 10 * 1024 * 1024) {
-                showUploadError(`${file.name} exceeds the 10 MB per-file limit.`);
-                return;
-            }
-
-            if (file.size === 0) {
-                showUploadError(`${file.name} is empty.`);
-                return;
-            }
-        }
-
-        if (totalSize > 50 * 1024 * 1024) {
-            showUploadError("The combined upload size cannot exceed 50 MB.");
-            return;
-        }
-
-        const formData = new FormData();
-
-        files.forEach((file) => {
-            formData.append("files", file);
-        });
-
-        formData.append("category", categoryInput.value);
-
-        uploadLoading.classList.remove("hidden");
-        uploadError.classList.add("hidden");
-        uploadResult.classList.add("hidden");
-        uploadButton.disabled = true;
-        uploadButton.textContent = "Uploading...";
-
-        try {
-            const response = await fetch(uploadEndpoint, {
-                method: "POST",
-                body: formData
-            });
-
-            const data = await response.json();
-
-            if (!response.ok) {
-                throw new Error(data.error || "Unable to upload the documents.");
-            }
-
-            // Activate the new submission only after       successful processing.
-if (data.submission_id) {
-    activeSubmissionId = data.submission_id;
-}
-
-displayUploadResult(data);
-
-        } catch (error) {
-            showUploadError(
-                error.message || "An unexpected upload error occurred."
-            );
-        } finally {
-            uploadLoading.classList.add("hidden");
-            uploadButton.disabled = false;
-            uploadButton.textContent = "Upload and Process Documents";
-        }
     });
 
     // Safely convert supported Markdown into formatted HTML.
@@ -506,24 +568,17 @@ function destroyComplianceCharts() {
 // Display the compliance visualization returned by Python.
 function displayVisualization(data) {
 
-    if (typeof Chart === "undefined") {
-        throw new Error(
-            "Chart.js could not be loaded. Please check your internet connection."
-        );
-    }
-
     const chartData = data.chart_data || {};
     const labels = chartData.labels || [];
     const counts = chartData.counts || [];
     const percentages = chartData.percentages || [];
+    const hasChartData = labels.length > 0 &&
+        labels.length === counts.length &&
+        labels.length === percentages.length;
 
-    if (
-        !labels.length ||
-        labels.length !== counts.length ||
-        labels.length !== percentages.length
-    ) {
+    if (hasChartData && typeof Chart === "undefined") {
         throw new Error(
-            "The compliance analyzer returned incomplete chart data."
+            "Chart.js could not be loaded. Please check your internet connection."
         );
     }
 
@@ -531,42 +586,49 @@ function displayVisualization(data) {
     const messageBubble = createAssistantMessage();
     messageBubble.appendChild(visualizationContainer);
     visualizationContainer.classList.remove("hidden");
-    document.getElementById("compliance-doughnut-chart").closest(".chart-card").classList.remove("hidden");
-    document.getElementById("compliance-bar-chart").closest(".chart-card").classList.remove("hidden");
-    document.getElementById("compliance-bar-chart").closest(".chart-card").querySelector("h4").textContent = "Clause Status Comparison";
+    const doughnutCard = document.getElementById("compliance-doughnut-chart").closest(".chart-card");
+    const barChartCard = document.getElementById("compliance-bar-chart").closest(".chart-card");
+    doughnutCard.classList.toggle("hidden", !hasChartData);
+    barChartCard.classList.toggle("hidden", !hasChartData);
+    doughnutCard.querySelector("h4").textContent = "Compliance Declaration Distribution";
+    barChartCard.querySelector("h4").textContent = "Compliance Declaration Counts";
 
     visualizationTitle.textContent =
         data.title || "Vendor Compliance Analysis";
 
-    visualizationSubtitle.textContent =
-        data.analysis_complete
-            ? "All extracted declarations have been matched to the identified clauses."
-            : "Preliminary analysis — review the warnings before relying on these results.";
+    visualizationSubtitle.textContent = data.clause_matching_performed === false
+        ? "Clause-level matching was not performed. The figures and charts below count extracted vendor declarations only; they are not independently verified contractual compliance."
+        : data.analysis_complete
+            ? "Extracted vendor declarations were matched to the identified clauses. These are vendor-declared results, not independent verification."
+            : "Preliminary analysis — review the warnings before relying on these results. Declaration counts are based on extracted vendor statements.";
 
     // Display summary figures.
     const summary = data.summary || {};
-
-    const breakdown = summary.breakdown || {};
-    const total = summary.total_clauses ?? counts.reduce(
-        (sum, count) => sum + Number(count || 0), 0
-    );
+    const declarationSummary = data.declaration_summary || summary;
+    const breakdown = declarationSummary.breakdown || {};
+    const totalClauses = data.clause_count ?? summary.total_clauses ?? 0;
+    const totalDeclarations = declarationSummary.total_declarations ?? data.declaration_count ?? 0;
 
     const stats = [
         {
-            label: "Total Clauses",
-            value: total
+            label: "Extracted Clauses",
+            value: totalClauses
+        },
+        {
+            label: "Compliance Declarations",
+            value: totalDeclarations
         },
         {
             label: "Complied",
-            value: breakdown["Complied"]?.count ?? summary.complied ?? 0
+            value: breakdown["Complied"]?.count ?? declarationSummary.complied ?? 0
         },
         {
             label: "Partially Complied",
-            value: breakdown["Partially Complied"]?.count ?? summary.partially_complied ?? 0
+            value: breakdown["Partially Complied"]?.count ?? declarationSummary.partially_complied ?? 0
         },
         {
             label: "Not Complied",
-            value: breakdown["Not Complied"]?.count ?? summary.not_complied ?? 0
+            value: breakdown["Not Complied"]?.count ?? declarationSummary.not_complied ?? 0
         }
     ];
 
@@ -600,7 +662,26 @@ function displayVisualization(data) {
     };
     const chartColors = labels.map(label => statusColors[label] || "#64748B");
 
+    // Display analyzer warnings even when no chart can be drawn.
+    const warnings = Array.isArray(data.warnings) ? data.warnings : [];
+    visualizationWarningsList.replaceChildren();
+    warnings.forEach((warning) => {
+        const item = document.createElement("li");
+        item.textContent = warning;
+        visualizationWarningsList.appendChild(item);
+    });
+    visualizationWarnings.classList.toggle("hidden", warnings.length === 0);
+    visualizationNotice.textContent = data.notice ||
+        "These figures represent vendor-declared compliance statuses. They do not independently establish contractual compliance.";
+
     // Doughnut chart.
+    if (!hasChartData) {
+        visualizationContainer.classList.remove("hidden");
+        answerSection.classList.remove("hidden");
+        scrollConversationToEnd();
+        return;
+    }
+
     const doughnutContext = document
         .getElementById("compliance-doughnut-chart")
         .getContext("2d");
@@ -635,7 +716,7 @@ function displayVisualization(data) {
                         label: function(context) {
                             const index = context.dataIndex;
 
-                            return `${context.label}: ${context.raw} clauses (${percentages[index]}%)`;
+                            return `${context.label}: ${context.raw} declarations (${percentages[index]}%)`;
                         }
                     }
                 }
@@ -652,7 +733,6 @@ function displayVisualization(data) {
         .getElementById("compliance-bar-chart")
         .getContext("2d");
 
-    const barChartCard = document.getElementById("compliance-bar-chart").closest(".chart-card");
     barChartCard.classList.toggle("hidden", barLabels.length === 0);
     if (barLabels.length) complianceBarChart = new Chart(barContext, {
         type: "bar",
@@ -661,7 +741,7 @@ function displayVisualization(data) {
             labels: barLabels,
 
             datasets: [{
-                label: "Number of Clauses",
+                label: "Number of Compliance Declarations",
                 data: barCounts,
                 backgroundColor: barColors,
                 borderRadius: 7,
@@ -677,7 +757,7 @@ function displayVisualization(data) {
             scales: {
                 x: {
                     beginAtZero: true,
-                    title: { display: true, text: "Number of clauses" },
+                    title: { display: true, text: "Number of declarations" },
                     ticks: {
                         precision: 0
                     }
@@ -701,7 +781,7 @@ function displayVisualization(data) {
                         label: function(context) {
                             const index = context.dataIndex;
 
-                            return `${context.raw} clauses (${percentages[index]}%)`;
+                            return `${context.raw} declarations (${percentages[index]}%)`;
                         }
                     }
                 }
@@ -724,39 +804,29 @@ function displayVisualization(data) {
         }]
     });
 
-    // Display analyzer warnings.
-    const warnings = Array.isArray(data.warnings)
-        ? data.warnings
-        : [];
-
-    visualizationWarningsList.replaceChildren();
-
-    warnings.forEach((warning) => {
-        const item = document.createElement("li");
-        item.textContent = warning;
-        visualizationWarningsList.appendChild(item);
-    });
-
-    visualizationWarnings.classList.toggle(
-        "hidden",
-        warnings.length === 0
-    );
-
-    visualizationNotice.textContent =
-        data.notice ||
-        "These figures represent vendor-declared compliance statuses. They do not independently establish contractual compliance.";
-
     visualizationContainer.classList.remove("hidden");
 
     answerSection.classList.remove("hidden");
     scrollConversationToEnd();
 }
 
-function displayComparison(data) {
+function displayComparison(data, question = "") {
     const comparison = data.comparison || {};
     const submissions = comparison.submissions || [];
-    if (typeof Chart === "undefined" || submissions.length === 0) {
-        throw new Error("Comparison chart data is unavailable.");
+    if (submissions.length === 0) {
+        throw new Error("Comparison data is unavailable.");
+    }
+    const complianceChart = comparison.compliance_chart || {};
+    const deliveryMetric = comparison.metrics && comparison.metrics.delivery_days;
+    const deliveryChartDataValid = Array.isArray(deliveryMetric) && deliveryMetric.length > 0 &&
+        deliveryMetric.every(item => item && typeof item.label === "string" && item.label.trim() !== "" &&
+            typeof item.value === "number" && Number.isFinite(item.value) && item.value >= 0);
+    const deliveryRequested = /\b(delivery|lead[ -]?time|days?|weeks?)\b/i.test(question);
+    const useDeliveryChart = deliveryRequested && deliveryChartDataValid;
+    const useComplianceChart = !deliveryRequested && complianceChart.available === true;
+    const chartAvailable = useDeliveryChart || useComplianceChart;
+    if (chartAvailable && typeof Chart === "undefined") {
+        throw new Error("Chart.js could not be loaded. Please check your internet connection.");
     }
     destroyComplianceCharts();
     const messageBubble = createAssistantMessage();
@@ -798,20 +868,69 @@ function displayComparison(data) {
         item.textContent = note;
         visualizationWarningsList.appendChild(item);
     });
-    visualizationWarnings.classList.toggle("hidden", notes.length === 0);
+    if (deliveryRequested && !deliveryChartDataValid) {
+        const warning = document.createElement("li");
+        warning.textContent = "Delivery chart was suppressed because its data was missing or invalid.";
+        visualizationWarningsList.appendChild(warning);
+    }
     visualizationNotice.textContent = "Values are deterministic counts of extracted declarations, not independent verification of compliance.";
     const doughnutCard = document.getElementById("compliance-doughnut-chart").closest(".chart-card");
     doughnutCard.classList.add("hidden");
     const barCard = document.getElementById("compliance-bar-chart").closest(".chart-card");
-    const deliveryMetric = comparison.metrics && comparison.metrics.delivery_days;
-    barCard.querySelector("h4").textContent = deliveryMetric && deliveryMetric.length ? "Extracted Delivery Period (days)" : "Declaration Counts by Submission";
-    const chartValues = submissions.flatMap(item => Object.values(item.counts || {}));
-    barCard.classList.toggle("hidden", !chartValues.some(value => Number(value) > 0));
-    if (chartValues.some(value => Number(value) > 0)) complianceBarChart = new Chart(document.getElementById("compliance-bar-chart").getContext("2d"), {
+    barCard.classList.toggle("hidden", !chartAvailable);
+    if (useDeliveryChart) {
+        barCard.querySelector("h4").textContent = "Extracted Delivery Period (days)";
+        complianceBarChart = new Chart(document.getElementById("compliance-bar-chart").getContext("2d"), {
+            type: "bar",
+            data: {
+                labels: deliveryMetric.map(item => item.label),
+                datasets: [{ label: "Days", data: deliveryMetric.map(item => item.value), backgroundColor: "#2563EB" }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: { y: { beginAtZero: true, ticks: { precision: 0 }, title: { display: true, text: "Delivery period (days)" } }, x: { title: { display: true, text: "Submission / Vendor" } } },
+                plugins: { legend: { display: true, position: "bottom" } }
+            }
+        });
+    } else if (useComplianceChart) {
+        const validChart = Array.isArray(complianceChart.labels) && complianceChart.labels.length >= 2 &&
+            Array.isArray(complianceChart.datasets) && complianceChart.datasets.length === 2 &&
+            complianceChart.datasets.every(dataset => Array.isArray(dataset.data) && dataset.data.length === complianceChart.labels.length && dataset.data.every(value => Number.isFinite(Number(value)) && Number(value) >= 0));
+        if (!validChart) {
+            barCard.classList.add("hidden");
+            const warning = document.createElement("li");
+            warning.textContent = "Compliance graph was suppressed because the comparison returned invalid chart values.";
+            visualizationWarningsList.appendChild(warning);
+            visualizationWarnings.classList.remove("hidden");
+        } else {
+            barCard.querySelector("h4").textContent = complianceChart.complete ? "Compliance Declarations by Submission" : "Extracted Compliance Declarations by Submission (Review Required)";
+            complianceBarChart = new Chart(document.getElementById("compliance-bar-chart").getContext("2d"), {
         type: "bar",
-        data: deliveryMetric && deliveryMetric.length ? { labels: deliveryMetric.map(item => item.label), datasets: [{ label: "Days", data: deliveryMetric.map(item => item.value), backgroundColor: "#2563eb" }] } : { labels: submissions.map(item => item.label), datasets: (comparison.statuses || []).map((status, index) => ({ label: status, data: submissions.map(item => item.counts[status] || 0), backgroundColor: ["#16A34A", "#F59E0B", "#DC2626", "#64748B"][index] })) },
-        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }
-    });
+                data: {
+                    labels: complianceChart.labels,
+                    datasets: complianceChart.datasets.map(dataset => ({
+                        label: dataset.label,
+                        data: dataset.data,
+                        backgroundColor: dataset.label === "Complied" ? "#16A34A" : dataset.label === "Non-Complied" ? "#DC2626" : "#64748B",
+                        borderRadius: 7
+                    }))
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: { beginAtZero: true, ticks: { precision: 0 }, title: { display: true, text: complianceChart.y_axis_label || "Compliance declarations" } },
+                        x: { title: { display: true, text: complianceChart.x_axis_label || "Submission / Vendor" } }
+                    },
+                    plugins: { legend: { display: true, position: "bottom" } }
+                }
+            });
+        }
+    } else {
+        barCard.querySelector("h4").textContent = "Compliance Comparison";
+    }
+    visualizationWarnings.classList.toggle("hidden", visualizationWarningsList.children.length === 0);
     visualizationContainer.classList.remove("hidden");
     answerSection.classList.remove("hidden");
     scrollConversationToEnd();
@@ -859,27 +978,45 @@ function displayComparison(data) {
         const ocrPages = Array.isArray(data.pages_requiring_ocr)
             ? data.pages_requiring_ocr
             : [];
+        const bubble = createAssistantMessage();
+        bubble.classList.add("upload-summary-message");
+        const heading = document.createElement("h3");
+        heading.textContent = "Document processing results";
+        const status = document.createElement("p");
+        status.className = "upload-result-status";
+        status.textContent = `Processing status: ${data.status || "Unknown"}`;
+        bubble.append(heading, status);
 
-        document.getElementById("submission-id").textContent =
-            `Submission ID: ${data.submission_id || "Not available"}`;
+        const metrics = document.createElement("div");
+        metrics.className = "upload-result-metrics";
+        [
+            ["Files processed", summary.files_processed ?? 0],
+            ["Files failed", summary.files_failed ?? 0],
+            ["Sections extracted", summary.total_sections ?? 0],
+            ["Pages requiring review", summary.pages_requiring_ocr ?? ocrPages.length]
+        ].forEach(([label, value]) => {
+            const item = document.createElement("div");
+            const number = document.createElement("strong");
+            number.textContent = value;
+            const caption = document.createElement("span");
+            caption.textContent = label;
+            item.append(number, caption);
+            metrics.appendChild(item);
+        });
+        bubble.appendChild(metrics);
 
-        document.getElementById("submission-status").textContent =
-            `Processing status: ${data.status || "Unknown"}`;
+        if (data.workspace_submission_count > 1) {
+            const workspaceNote = document.createElement("p");
+            workspaceNote.className = "upload-workspace-note";
+            workspaceNote.textContent = `This tender workspace now contains ${data.workspace_submission_count} submissions.`;
+            bubble.appendChild(workspaceNote);
+        }
 
-        document.getElementById("files-processed").textContent =
-            summary.files_processed ?? 0;
-
-        document.getElementById("files-failed").textContent =
-            summary.files_failed ?? 0;
-
-        document.getElementById("sections-extracted").textContent =
-            summary.total_sections ?? 0;
-
-        document.getElementById("ocr-pages").textContent =
-            summary.pages_requiring_ocr ?? ocrPages.length;
-
-        const filesList = document.getElementById("uploaded-files-list");
-        filesList.replaceChildren();
+        const filesHeading = document.createElement("h4");
+        filesHeading.textContent = "Uploaded documents";
+        bubble.appendChild(filesHeading);
+        const filesList = document.createElement("ul");
+        filesList.className = "upload-result-files";
 
         files.forEach((file) => {
             const item = document.createElement("li");
@@ -888,24 +1025,19 @@ function displayComparison(data) {
             const sectionCount = file.section_count ?? 0;
 
             item.textContent =
-                `${fileName} — ${status} (${sectionCount} sections)`;
+                `${fileName} — ${status} (${sectionCount} sections)${file.error ? ` — ${file.error}` : ""}`;
 
             filesList.appendChild(item);
         });
+        bubble.appendChild(filesList);
 
-        const reviewWarning = document.getElementById("review-warning");
-
-        reviewWarning.classList.toggle(
-            "hidden",
-            ocrPages.length === 0 &&
-            (summary.files_failed ?? 0) === 0
-        );
-
-        uploadResult.classList.remove("hidden");
-        uploadResult.scrollIntoView({
-            behavior: "smooth",
-            block: "start"
-        });
+        if (ocrPages.length || (summary.pages_requiring_ocr ?? 0) > 0 || (summary.files_failed ?? 0) > 0) {
+            const warning = document.createElement("p");
+            warning.className = "upload-result-warning";
+            warning.textContent = "Some files or pages require review. Check extraction status and OCR notes before relying on the analysis.";
+            bubble.appendChild(warning);
+        }
+        scrollConversationToEnd();
     }
 
     function showError(message) {
@@ -913,8 +1045,4 @@ function displayComparison(data) {
         errorMessage.classList.remove("hidden");
     }
 
-    function showUploadError(message) {
-        uploadError.textContent = message;
-        uploadError.classList.remove("hidden");
-    }
 });

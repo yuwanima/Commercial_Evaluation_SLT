@@ -178,3 +178,109 @@ document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('.panel').forEach(p=>p.hidden=p.id!=='p-'+b.dataset.tab);
   try{location.hash=b.dataset.tab}catch(e){}});
 if(location.hash&&document.querySelector(`[data-tab="${location.hash.slice(1)}"]`))document.querySelector(`[data-tab="${location.hash.slice(1)}"]`).click();
+
+// Reuse the existing same-origin chatbot page in a resizable drawer.
+const comopsLauncher = document.getElementById('comops-launcher');
+const comopsPanel = document.getElementById('comops-panel');
+const comopsFrame = document.getElementById('comops-frame');
+const comopsClose = document.getElementById('comops-close');
+const comopsExpand = document.getElementById('comops-expand');
+const comopsResizeHandle = document.getElementById('comops-resize-handle');
+let comopsPanelWidth = 520;
+let comopsRestoreWidth = comopsPanelWidth;
+let comopsMaximized = false;
+let comopsResizeStart = null;
+
+function comopsWidthLimits(){
+  const viewport = window.innerWidth;
+  const minimum = Math.min(viewport <= 600 ? 280 : 360, viewport);
+  const maximum = viewport <= 600
+    ? viewport
+    : Math.min(900, Math.max(minimum, viewport - 280));
+  return {minimum, maximum};
+}
+
+function setComopsPanelWidth(width, allowFullViewport=false){
+  const {minimum, maximum:availableMaximum} = comopsWidthLimits();
+  const maximum = allowFullViewport ? window.innerWidth : availableMaximum;
+  comopsPanelWidth = Math.round(Math.max(minimum, Math.min(maximum, width)));
+  comopsPanel.style.setProperty('--comops-panel-width', `${comopsPanelWidth}px`);
+  comopsResizeHandle.setAttribute('aria-valuemin', String(minimum));
+  comopsResizeHandle.setAttribute('aria-valuemax', String(maximum));
+  comopsResizeHandle.setAttribute('aria-valuenow', String(comopsPanelWidth));
+}
+
+function openComopsPanel(){
+  setComopsPanelWidth(comopsMaximized ? window.innerWidth : comopsPanelWidth, comopsMaximized);
+  comopsPanel.classList.add('is-open');
+  comopsPanel.setAttribute('aria-hidden', 'false');
+  comopsLauncher.setAttribute('aria-expanded', 'true');
+  if(comopsFrame.dataset.loaded !== 'true'){
+    comopsFrame.src = comopsFrame.dataset.src;
+    comopsFrame.dataset.loaded = 'true';
+  }
+  comopsClose.focus({preventScroll:true});
+}
+
+function closeComopsPanel(){
+  comopsPanel.classList.remove('is-open');
+  comopsPanel.setAttribute('aria-hidden', 'true');
+  comopsLauncher.setAttribute('aria-expanded', 'false');
+  comopsLauncher.focus({preventScroll:true});
+}
+
+comopsLauncher.addEventListener('click', event=>{
+  event.preventDefault();
+  openComopsPanel();
+});
+comopsClose.addEventListener('click', closeComopsPanel);
+comopsExpand.addEventListener('click', ()=>{
+  if(comopsMaximized){
+    comopsMaximized = false;
+    comopsExpand.setAttribute('aria-pressed', 'false');
+    comopsExpand.setAttribute('aria-label', 'Maximize ComOps panel');
+    comopsExpand.title = 'Maximize panel';
+    setComopsPanelWidth(comopsRestoreWidth);
+  }else{
+    comopsRestoreWidth = comopsPanelWidth;
+    comopsMaximized = true;
+    comopsExpand.setAttribute('aria-pressed', 'true');
+    comopsExpand.setAttribute('aria-label', 'Restore ComOps panel size');
+    comopsExpand.title = 'Restore panel size';
+    setComopsPanelWidth(window.innerWidth, true);
+  }
+});
+
+comopsResizeHandle.addEventListener('pointerdown', event=>{
+  if(!comopsPanel.classList.contains('is-open') || comopsMaximized) return;
+  if(event.button !== undefined && event.button !== 0) return;
+  comopsResizeStart = {x:event.clientX, width:comopsPanelWidth, pointerId:event.pointerId};
+  comopsResizeHandle.setPointerCapture(event.pointerId);
+  document.body.classList.add('comops-resizing');
+  event.preventDefault();
+});
+comopsResizeHandle.addEventListener('pointermove', event=>{
+  if(!comopsResizeStart || event.pointerId !== comopsResizeStart.pointerId) return;
+  setComopsPanelWidth(comopsResizeStart.width + comopsResizeStart.x - event.clientX);
+});
+function finishComopsResize(event){
+  if(!comopsResizeStart || (event.pointerId !== undefined && event.pointerId !== comopsResizeStart.pointerId)) return;
+  comopsResizeStart = null;
+  document.body.classList.remove('comops-resizing');
+}
+comopsResizeHandle.addEventListener('pointerup', finishComopsResize);
+comopsResizeHandle.addEventListener('pointercancel', finishComopsResize);
+comopsResizeHandle.addEventListener('keydown', event=>{
+  if(event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+  event.preventDefault();
+  setComopsPanelWidth(comopsPanelWidth + (event.key === 'ArrowLeft' ? 24 : -24));
+});
+
+document.addEventListener('keydown', event=>{
+  if(event.key === 'Escape' && comopsPanel.classList.contains('is-open')) closeComopsPanel();
+});
+window.addEventListener('resize', ()=>{
+  if(comopsMaximized) setComopsPanelWidth(window.innerWidth, true);
+  else setComopsPanelWidth(comopsPanelWidth);
+});
+setComopsPanelWidth(comopsPanelWidth);
