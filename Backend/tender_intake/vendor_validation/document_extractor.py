@@ -1,14 +1,17 @@
 import openpyxl
 from pathlib import Path
 from importlib import import_module
+import tempfile
 
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 from pypdf import PdfReader
 
 
+
 SUPPORTED_EXTENSIONS = {
     ".pdf",
+    ".doc",
     ".docx",
     ".xlsx",
     ".xlsm",
@@ -289,6 +292,17 @@ def extract_document(file_path):
 
     if extension == ".pdf":
         sections = extract_pdf(path)
+
+    elif extension == ".doc":
+        try:
+            from Backend.Technical import convert
+        except ImportError:
+            from Technical import convert
+
+        # Convert into temporary derived data, preserving the uploaded .doc.
+        with tempfile.TemporaryDirectory(prefix="vendor_doc_conversion_") as temp_dir:
+            converted_path = convert.normalise(path, temp_dir)
+            sections = extract_docx(converted_path)
 
     elif extension == ".docx":
         sections = extract_docx(path)

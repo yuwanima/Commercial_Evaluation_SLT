@@ -15,14 +15,13 @@
         </div>
         <div class="header-actions">
             <button type="button" id="new-chat-button" class="new-chat-button">New chat</button>
-            <a class="back-link" href="{{ url_for('index') }}">Back to Tender Processing</a>
         </div>
     </header>
 
     <main class="chatbot-container">
         <section id="answer-section" class="conversation-shell" aria-label="ComOps conversation">
             <div id="welcome-screen" class="welcome-screen">
-                <div class="welcome-avatar" aria-hidden="true">CO</div>
+                <img class="welcome-avatar" src="/chatbot.jpg" alt="ComOps robot">
                 <p class="eyebrow">SLT PROCUREMENT ASSISTANT</p>
                 <h2>Hello, I’m ComOps.</h2>
                 <p class="welcome-copy">Ask about SLT procurement contracts, clauses, requirements and conditions. Answers are grounded in the available contract documents.</p>
@@ -59,7 +58,7 @@
             </div>
         </section>
 
-        <form id="chatbot-form" class="message-composer" data-endpoint="{{ url_for('chatbot.chatbot_ask') }}">
+        <form id="chatbot-form" class="message-composer" data-endpoint="{{ url_for('chatbot.chatbot_ask') }}" data-upload-endpoint="{{ url_for('chatbot.chatbot_upload') }}">
             <label class="visually-hidden" for="category">Contract Category</label>
             <select id="category" name="category" aria-label="Contract Category">
                 <option value="">All contract categories</option>
@@ -69,12 +68,20 @@
             </select>
             <div class="composer-input-wrap">
                 <label class="visually-hidden" for="question">Your question</label>
-                <textarea id="question" name="question" rows="1" maxlength="5000" placeholder="Ask ComOps anything about SLT procurement…" required></textarea>
-                <div class="composer-footer">
+                <div id="attachment-list" class="attachment-list hidden" aria-label="Selected attachments"></div>
+                <p id="attachment-error" class="attachment-error hidden" role="alert"></p>
+                <div class="message-input-row">
+                    <label class="attachment-button" for="vendor-files" title="Attach vendor documents" aria-label="Attach vendor documents">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 12.5 6.1-6.1a3.2 3.2 0 0 1 4.5 4.5l-8.1 8.1a5 5 0 0 1-7.1-7.1l8.2-8.2" /></svg>
+                    </label>
+                    <input type="file" id="vendor-files" name="files" class="visually-hidden" accept=".pdf,.doc,.docx,.xlsx,.xlsm,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple>
+                    <textarea id="question" name="question" rows="1" maxlength="5000" placeholder="Ask ComOps anything about SLT procurement…"></textarea>
+                    <div class="composer-footer">
                     <span id="question-count">0 / 5000</span>
                     <button type="submit" id="ask-button" aria-label="Send message" title="Send message">
                         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12 20 4l-5 16-3-6-8-2Zm8 2 8-10" /></svg>
                     </button>
+                    </div>
                 </div>
             </div>
             <p class="conversation-note">Answers use the current question and retrieved evidence. Previous messages are not automatically sent as context.</p>

@@ -736,10 +736,12 @@
     }}
 /* ContractWise AI link in the main header */
 header .wrap {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 16px;
+    min-height: 90px;
 }
 
 header a.btn {
@@ -752,6 +754,196 @@ header a.btn {
     border-radius: 8px;
     border: 2px solid #ffffff;
     white-space: nowrap;
+}
+
+
+/* ComOps 3D header robot */
+header .header-robot {
+    position: absolute;
+    right: 0;
+    top: 50%;
+    z-index: 2;
+    translate: 0 -50%;
+    width: 90px;
+    height: 90px;
+    margin: 0;
+    flex: 0 0 90px;
+}
+
+.robot-display {
+    position: relative;
+    display: block;
+    width: 90px;
+    height: 90px;
+    overflow: hidden;
+    border: 3px solid #8ebeea;
+    border-radius: 50%;
+    background: radial-gradient(
+        circle at 35% 25%,
+        #ffffff 0,
+        #edf6ff 48%,
+        #c7def4 100%
+    );
+    box-shadow:
+        0 12px 24px rgba(17, 45, 78, .24),
+        0 3px 7px rgba(17, 45, 78, .16),
+        inset 0 2px 5px rgba(255, 255, 255, .95),
+        inset 0 -5px 12px rgba(29, 79, 130, .18);
+    transition: transform .22s ease, box-shadow .22s ease;
+    animation: robot-float 5s ease-in-out infinite;
+}
+
+.robot-display:hover {
+    transform: translateY(-4px);
+    box-shadow:
+        0 17px 28px rgba(17, 45, 78, .27),
+        0 5px 10px rgba(17, 45, 78, .18),
+        inset 0 2px 5px rgba(255, 255, 255, .95),
+        inset 0 -5px 12px rgba(29, 79, 130, .18);
+}
+
+.robot-art {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center 46%;
+    transform: scale(1.18);
+    filter: drop-shadow(0 5px 5px rgba(17, 45, 78, .2));
+}
+
+.robot-display::after {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: linear-gradient(
+        145deg,
+        rgba(255, 255, 255, .4),
+        transparent 43%,
+        rgba(14, 45, 83, .14)
+    );
+    box-shadow:
+        inset 0 2px 6px rgba(255, 255, 255, .62),
+        inset 0 -5px 10px rgba(12, 35, 65, .2);
+    content: "";
+    pointer-events: none;
+}
+
+.robot-display:focus-visible {
+    outline: 3px solid #2e75b6;
+    outline-offset: 3px;
+}
+
+@keyframes robot-float {
+    0%, 100% {
+        translate: 0 0;
+    }
+    50% {
+        translate: 0 -5px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .robot-display {
+        animation: none;
+    }
+}
+
+
+.comops-panel {
+    --comops-panel-width: 520px;
+    position: fixed;
+    top: 0;
+    right: 0;
+    z-index: 1000;
+    display: grid;
+    grid-template-rows: 48px minmax(0, 1fr);
+    width: min(var(--comops-panel-width), 100vw);
+    height: 100vh;
+    height: 100dvh;
+    border-left: 1px solid #cbd8e6;
+    background: #f7f9fc;
+    box-shadow: -14px 0 36px rgba(20, 43, 70, .2);
+    transform: translateX(calc(100% + 16px));
+    visibility: hidden;
+    pointer-events: none;
+    transition: transform .28s ease, visibility 0s linear .28s;
+}
+
+.comops-panel.is-open {
+    transform: translateX(0);
+    visibility: visible;
+    pointer-events: auto;
+    transition-delay: 0s;
+}
+
+.comops-panel-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 0 12px 0 18px;
+    border-bottom: 1px solid #dce5ef;
+    background: #123b68;
+    color: #fff;
+    font-size: 14px;
+    font-weight: 700;
+}
+
+.comops-panel-controls { display: flex; align-items: center; gap: 7px; }
+.comops-panel-control {
+    display: grid;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    place-items: center;
+    border: 1px solid rgba(255, 255, 255, .32);
+    border-radius: 7px;
+    background: transparent;
+    color: #fff;
+    cursor: pointer;
+}
+.comops-panel-control:hover { background: rgba(255, 255, 255, .15); }
+.comops-panel-control:focus-visible,
+.comops-resize-handle:focus-visible { outline: 3px solid #78b8f0; outline-offset: 2px; }
+.comops-panel-control svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+.comops-frame { display: block; width: 100%; height: 100%; min-height: 0; border: 0; background: #f7f9fc; }
+.comops-resize-handle {
+    position: absolute;
+    top: 48px;
+    bottom: 0;
+    left: -6px;
+    z-index: 2;
+    width: 12px;
+    cursor: col-resize;
+    touch-action: none;
+}
+.comops-resize-handle::after {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 5px;
+    width: 2px;
+    background: transparent;
+    content: "";
+    transition: background .15s ease;
+}
+.comops-resize-handle:hover::after,
+.comops-resize-handle:focus-visible::after { background: #6fa9df; }
+
+@media (prefers-reduced-motion: reduce) {
+    .comops-panel,
+    .comops-panel-control { transition: none; }
+}
+body.comops-resizing { user-select: none; cursor: col-resize; }
+
+@media (max-width: 600px) {
+    .comops-panel { --comops-panel-width: 100vw; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .comops-panel { transition: none; }
 }
 
 header a.btn:hover {
@@ -788,3 +980,29 @@ header a.btn:hover {
 .award-notes{margin-top:12px;font-size:13px}
 .award-notes summary{cursor:pointer;color:var(--navy);font-weight:600}
 .non-eligibility.review{border-top-color:#d7b45a}
+
+/* ComOps drawer finish: match the tender page with restrained blue glass depth. */
+.comops-panel {
+    border-left-color: rgba(193, 213, 232, .92);
+    background: rgba(247, 250, 253, .98);
+    box-shadow: -20px 0 46px rgba(18, 43, 68, .2), -3px 0 10px rgba(18, 43, 68, .08), inset 1px 0 rgba(255, 255, 255, .8);
+    backdrop-filter: blur(14px) saturate(1.08);
+    transition: transform .34s cubic-bezier(.22, .8, .25, 1), visibility 0s linear .34s;
+}
+.comops-panel.is-open { transition-delay: 0s; }
+.comops-panel-toolbar {
+    border-bottom-color: rgba(197, 220, 240, .28);
+    background: linear-gradient(112deg, #123b68, #174f7d 62%, #1d5b88);
+    box-shadow: inset 0 1px rgba(255, 255, 255, .12), 0 3px 10px rgba(12, 41, 68, .13);
+}
+.comops-panel-control {
+    border-color: rgba(231, 243, 253, .42);
+    border-radius: 9px;
+    background: rgba(255, 255, 255, .055);
+    box-shadow: inset 0 1px rgba(255, 255, 255, .12);
+    transition: transform .16s ease, background .16s ease, border-color .16s ease;
+}
+.comops-panel-control:hover { transform: translateY(-1px); border-color: rgba(255, 255, 255, .72); background: rgba(255, 255, 255, .15); }
+.comops-resize-handle::after { background: rgba(91, 145, 190, .16); }
+.comops-resize-handle:hover::after,
+.comops-resize-handle:focus-visible::after { background: #6fa9df; }
