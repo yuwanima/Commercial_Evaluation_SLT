@@ -14,6 +14,7 @@ from goods_services import consolidate
 from Price_Doc import pricesched
 from database import tender_data
 from Technical.evalreport import build_eval_workbook, eval_to_json, parse_eval
+from Technical import award_recommender
 from chatbot_routes import chatbot_bp
 
 app = Flask(
@@ -43,13 +44,15 @@ WORK = Path(tempfile.gettempdir()) / "store"
 WORK.mkdir(exist_ok=True)
 FILES = {"gcc": "GCC_Compliance_Comparison.xlsx", "gct": "GCT_Compliance_Comparison.xlsx",
          "scc": "SCC_Compliance_Comparison.xlsx",
-         "eval": "Technical_Evaluation_Compliance.xlsx", "price": "Price_Schedules.xlsx"}
+         "eval": "Technical_Evaluation_Compliance.xlsx", "price": "Price_Schedules.xlsx",
+         "award": "Award_Recommendation.xlsx"}
 OUTPUT_PREFIXES = {
     "gcc": "GCC_Compliance_Comparison",
     "gct": "GCT_Compliance_Comparison",
     "scc": "SCC_Compliance_Comparison",
     "eval": "Technical_Evaluation_Compliance",
     "price": "Price_Schedules",
+    "award": "Award_Recommendation",
 }
 
 # Uploaded documents are kept in the tenderdb database, not only in the job folder (which
@@ -166,6 +169,21 @@ def process():
             WORK / job / "out",
             closing_date=technical_closing_date(res.get("evals")),
         )
+        award_assessment = None
+        award_path = None
+        if res.get("evals"):
+            scan_dir = WORK / job / "award_scan"
+            source_metadata = award_recommender.inspect_input_documents(specs, work_dir=scan_dir)
+            award_assessment = award_recommender.build_award_assessment(
+                res.get("evals", []), price_res.get("rows", []), source_metadata=source_metadata
+            )
+            tender_numbers = list(dict.fromkeys((res.get("tenders", []) or []) + (price_res.get("tenders", []) or [])))
+            award_path = WORK / job / "out" / (
+                "Award_Recommendation" + consolidate._tender_suffix(tender_numbers) + ".xlsx"
+            )
+            award_recommender.build_award_workbook(
+                award_assessment, award_path, tender=", ".join(tender_numbers)
+            )
         source_names = set()
         for spec in specs:
             _, raw_path = spec.split("=", 1) if "=" in spec and not Path(spec).exists() else ("", spec)
@@ -205,6 +223,7 @@ def process():
             scc=bool(res["scc"]),
             eval=bool(res["evals"]), evals=res["evals"], price=bool(price_res["file"]),
             rows=price_res["rows"], notes=price_res["notes"],
+            award=bool(award_path and award_path.exists()), award_assessment=award_assessment,
             gcc_bidders=res["gcc_bidders"], gct_bidders=res["gct_bidders"], scc_bidders=res["scc_bidders"],
             document_summaries=res["document_summaries"], problems=problems,
         )
@@ -222,8 +241,9 @@ def download(job, kind):
         abort(404)
     output_dir = WORK / job / "out"
     output_files = list(output_dir.glob(f"{OUTPUT_PREFIXES[kind]}*.xlsx"))
-    if len(output_files) == 1:
-        p = output_files[0]
+    if len(output_files) != 1:
+        abort(404)
+    p = output_files[0]
     if not p.exists():
         abort(404)
     return send_file(p, as_attachment=True, download_name=p.name)

@@ -1124,10 +1124,20 @@ def run(inputs, out, closing_date=None):
             if e["stated"] is not None and abs(e["stated"] - total) > 0.5:
                 warn.append(f"{label}: calculated total {total:,.2f} differs from the total stated in the document ({e['stated']:,.2f})")
             row = rows.setdefault((e["bidder"], e["currency"]), dict(
-                bidder=e["bidder"], currency=e["currency"], total=0.0,
+                bidder=e["bidder"], currency=e["currency"], total=0.0, evaluated_total=0.0,
+                commission_total=0.0, commission_review_required=False,
                 unit_price_excl_taxes=None, unit_price_incl_taxes=None,
                 lines=0, status="To be evaluated", source=[], warnings=[]))
             row["total"] += total
+            row["evaluated_total"] += total
+            if e["kind"] == "foreign":
+                commission = sum(num(item.get("commission")) or 0 for item in e["items"])
+                row["commission_total"] += commission
+                if commission > 0:
+                    # The printed schedule does not reliably state the currency of this
+                    # separate commission column. Do not silently add unlike currencies.
+                    row["commission_review_required"] = True
+                    warn.append("Foreign schedule states a separate local-agent commission; confirm its currency and treatment before final price comparison.")
             if e["kind"] == "local":
                 excl = sum(num(item.get("unit_excl")) or 0 for item in e["items"])
                 incl = sum(
@@ -1147,4 +1157,9 @@ def run(inputs, out, closing_date=None):
             row["source"] = ", ".join(row["source"])
             res["rows"].append(row)
         rank_rows(res)
+        if any(row.get("commission_review_required") for row in res["rows"]):
+            res["notes"].append(
+                "One or more foreign schedules state a separate local-agent commission. "
+                "The system has not combined it with the foreign-currency total because its currency is not explicit; confirm and adjust before final ranking/award."
+            )
     return res

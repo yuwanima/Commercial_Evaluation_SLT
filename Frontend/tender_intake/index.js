@@ -119,7 +119,8 @@ function allBox(j,probs){
   const evaluationDetails=evaluations.map((ev,i)=>`<details class="result-details"><summary>${esc(ev.label||`Technical report ${i+1}`)}</summary>${evBox(j)(ev,i)}</details>`).join('');
   const evaluationSection=evaluations.length?`<div class="all-section"><h2>Technical Evaluation</h2>${evaluationDetails}</div>`:`<div class="all-section empty-section"><h2>Technical Evaluation</h2><p>No technical evaluation reports detected.</p></div>`;
   const priceSection=j.price?`<div class="all-section"><h2>Price Schedule</h2><details class="result-details" open><summary>View all price results (${priceRows.length})</summary>${priceBox(j,'')}</details></div>`:`<div class="all-section empty-section"><h2>Price Schedule</h2><p>No price schedules detected.</p></div>`;
-  return `<div class="all-results">${priceSection}${evaluationSection}${comparison}${probs?`<div class="res">${probs}</div>`:''}</div>`;
+  const awardSection=j.award&&j.award_assessment?`<div class="all-section"><h2>Commercial Evaluation & Award Assessment</h2>${awardBox(j)}</div>`:'';
+  return `<div class="all-results">${awardSection}${priceSection}${evaluationSection}${comparison}${probs?`<div class="res">${probs}</div>`:''}</div>`;
 }
 
 function evBox(j){return (ev,idx)=>{
@@ -130,23 +131,47 @@ function evBox(j){return (ev,idx)=>{
     const fields=ev.bids.headers.slice(1).map((header,i)=>({header,value:row[i+1]||''})).filter(x=>String(x.value).trim());
     return `<article class="bidder-detail"><h5>${esc(bidder)}</h5>${fields.length?fields.map(x=>`<div class="detail"><b>${esc(x.header)}</b><span>${esc(x.value)}</span></div>`).join(''):'<div class="meta">No additional bidder details detected.</div>'}</article>`;
   }).join('')}</div>`:'';
-  const nonEligibility=Array.isArray(ev.recommendations)?ev.recommendations.filter(r=>!r.eligible&&Array.isArray(r.issues)&&r.issues.length).map(r=>`<article class="non-eligibility"><h5>${esc(r.bidder)}</h5><ul>${r.issues.map(x=>`<li><b>${esc(x.area)}:</b> ${esc(x.status)}</li>`).join('')}</ul></article>`).join(''):'';
-  const reasons=nonEligibility?`<div class="non-eligibility-section"><h4>Why bidders are not eligible for commercial evaluation</h4>${nonEligibility}</div>`:'';
+  const nonEligibility=Array.isArray(ev.recommendations)?ev.recommendations.filter(r=>r.eligibility_status==='excluded').map(r=>`<article class="non-eligibility"><h5>${esc(r.bidder)} — excluded</h5>${r.eligibility_reason?`<p>${esc(r.eligibility_reason)}</p>`:''}${Array.isArray(r.issues)&&r.issues.length?`<ul>${r.issues.map(x=>`<li><b>${esc(x.area)}:</b> ${esc(x.status)}</li>`).join('')}</ul>`:''}</article>`).join(''):'';
+  const needsReview=Array.isArray(ev.recommendations)?ev.recommendations.filter(r=>r.eligibility_status==='review_required').map(r=>`<article class="non-eligibility review"><h5>${esc(r.bidder)} — manual TET review required</h5><p>${esc(r.eligibility_reason||'Technical eligibility could not be confirmed automatically.')}</p></article>`).join(''):'';
+  const reasons=(nonEligibility||needsReview)?`<div class="non-eligibility-section"><h4>Technical eligibility decisions requiring attention</h4>${nonEligibility}${needsReview}</div>`:'';
   const mats=ev.matrices.map(m=>`<div class="tw"><table class="mx"><thead><tr>${m.headers.map(x=>`<th>${esc(x)}</th>`).join('')}</tr></thead><tbody>`+
     m.rows.map(r=>`<tr><td>${esc(r.area)}</td>${r.cells.map(c=>`<td class="${c.c}">${esc(c.t)}</td>`).join('')}</tr>`).join('')+
     (m.overall?`<tr class="ov"><td>Overall result (as stated in report)</td>${m.overall.map(c=>`<td class="${c.c}">${esc(c.t)}</td>`).join('')}</tr>`:'')+
     `</tbody></table></div>`).join('<br>');
   return `<div class="evalbox"><h3>${ev.type==='SSET'?'Sole Source Evaluation':'Technical Evaluation'} — compliance by company</h3><div class="meta">File: ${esc(ev.label)}</div><div class="report-details"><h4>Report details</h4>${metaRows||'<div class="meta">No additional report details were detected.</div>'}</div><div class="recommendations">${bidDetails||'<h4>Details of Bidders</h4><div class="meta">No bidder details were detected.</div>'}</div>${mats}${reasons}
     ${idx===0?`<a class="xl" href="/api/download/${j.job}/eval">⬇ Download Excel (Tender No: ${esc(tender)})</a>`:''}</div>`}}
+function fmtMoney(value){
+  return value===null||value===undefined||!Number.isFinite(Number(value))?'Not available':Number(value).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+}
 function priceBox(j,probs){
   const rows=(Array.isArray(j.rows)?j.rows:[]).slice().sort((a,b)=>{
-    return String(a.bidder||'').localeCompare(String(b.bidder||''));
+    const rankA=a.rank||999, rankB=b.rank||999;
+    return rankA-rankB||String(a.bidder||'').localeCompare(String(b.bidder||''));
   });
-  const amount=value=>value===null||value===undefined?'Not available':Number(value).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
-  const body=rows.map(r=>`<tr><td>${esc(r.bidder)}</td><td>${esc(r.currency||'Not stated')}</td><td>${esc(amount(r.unit_price_excl_taxes))}</td><td>${esc(amount(r.unit_price_incl_taxes))}</td></tr>`).join('');
+  const body=rows.map(r=>`<tr><td>${esc(r.bidder)}</td><td>${esc(r.currency||'Not stated')}</td><td>${esc(fmtMoney(r.evaluated_total??r.total))}</td><td>${esc(r.rank?`${r.rank}${r.rank===1?'st':r.rank===2?'nd':r.rank===3?'rd':'th'}`:'Not ranked')}</td><td>${esc(r.status||'To be evaluated')}</td></tr>`).join('');
   const notes=(j.notes||[]).concat(rows.flatMap(r=>r.warnings||[]));
-  return `<div class="res"><h3>✓ Price evaluation ready</h3><div class="price-summary">All bidder prices (${rows.length})</div><table class="price-table"><thead><tr><th>Bidder</th><th>Currency</th><th>Total Unit Price (excl. taxes)</th><th>Total Unit Price (incl. taxes)</th></tr></thead><tbody>${body||'<tr><td colspan="4">No bidder prices detected.</td></tr>'}</tbody></table>${notes.length?`<ul class="warn">${notes.map(esc).map(x=>`<li>${x}</li>`).join('')}</ul>`:''}<a class="xl" href="/api/download/${j.job}/price">⬇ Download Price Schedules Excel</a>${probs?`<div>${probs}</div>`:''}</div>`;
+  return `<div class="res"><h3>✓ Price schedule extraction ready</h3><div class="price-summary">Extracted bidder price schedules (${rows.length})</div><table class="price-table"><thead><tr><th>Bidder</th><th>Currency</th><th>Evaluated price</th><th>Price rank</th><th>Status</th></tr></thead><tbody>${body||'<tr><td colspan="5">No bidder prices detected.</td></tr>'}</tbody></table>${notes.length?`<ul class="warn">${notes.map(esc).map(x=>`<li>${x}</li>`).join('')}</ul>`:''}<a class="xl" href="/api/download/${j.job}/price">⬇ Download Price Schedules Excel</a>${probs?`<div>${probs}</div>`:''}</div>`;
 }
+function awardBox(j){
+  const a=j.award_assessment||{};
+  const ready=a.decision==='recommendation_ready';
+  const provisional=a.decision==='provisional_price_leader';
+  const badgeClass=ready?'award-ready':provisional?'award-provisional':'award-review';
+  const money=p=>p&&p.amount!==null&&p.amount!==undefined?`${esc(p.currency||'')} ${esc(fmtMoney(p.amount))}`:'Not available';
+  const rows=(a.bidders||[]).map(b=>{
+    const p=b.price||{};
+    const rank=b.price_rank?`${b.price_rank}${b.price_rank===1?'st':b.price_rank===2?'nd':b.price_rank===3?'rd':'th'}`:'—';
+    return `<tr><td>${esc(b.bidder)}</td><td>${esc((b.eligibility_status||'review_required').replaceAll('_',' '))}</td><td>${money(p)}</td><td>${rank}</td><td>${b.technical_score==null?'—':esc(Number(b.technical_score).toFixed(2))}</td><td>${b.commercial_score==null?'—':esc(Number(b.commercial_score).toFixed(2))}</td><td>${b.overall_score==null?'—':esc(Number(b.overall_score).toFixed(2))}</td></tr>`;
+  }).join('');
+  const weights=a.weights&&a.weights.technical!==undefined&&a.weights.commercial!==undefined?`Technical ${esc(a.weights.technical)}% / Commercial ${esc(a.weights.commercial)}% (${a.weights.approved?'approval evidence found':'approval not verified'})`:'Not found in uploaded approved strategy documents';
+  const blockers=(a.blockers||[]).map(x=>`<li>${esc(x)}</li>`).join('');
+  const notes=(a.manual_notes||[]).map(x=>`<li>${esc(x)}</li>`).join('');
+  const awardConfirmation=a.award_confirmation_status==='confirmed_from_document'
+    ?`<div class="award-confirmed"><span>Confirmed awarded bidder (explicit approval/award document)</span><strong>${esc(a.awarded_bidder||'')}</strong><small>Source: ${esc((a.award_confirmation_sources||[]).join(', '))}</small></div>`
+    :`<div class="award-pending"><span>Actual awarded bidder</span><strong>${a.award_confirmation_status==='review_required'?'Award document needs manual verification':'Not established by uploaded award/approval documents'}</strong></div>`;
+  return `<div class="res award-res">${awardConfirmation}<div class="award-status ${badgeClass}">${esc(a.status_text||'Award assessment unavailable')}</div>${a.recommended_bidder?`<div class="award-winner"><span>${ready?'Preferred bidder for Tender Board consideration':'Provisional price front-runner'}</span><strong>${esc(a.recommended_bidder)}</strong>${a.recommended_score!=null?`<small>Overall weighted score: ${esc(Number(a.recommended_score).toFixed(2))}/100</small>`:a.recommended_price?`<small>Evaluated price: ${money(a.recommended_price)}</small>`:''}</div>`:`<p class="award-no-winner">The system cannot identify a defensible preferred bidder from the uploaded evidence yet.</p>`}<div class="award-meta"><span><b>Weighting record:</b> ${weights}</span><span><b>Eligible bidders:</b> ${esc(a.eligible_count??0)}</span><span><b>Excluded:</b> ${esc(a.excluded_count??0)}</span><span><b>Manual review:</b> ${esc(a.review_count??0)}</span></div><p class="award-basis"><b>Assessment basis:</b> ${esc(a.basis||'')}</p><div class="tw"><table class="price-table award-table"><thead><tr><th>Bidder</th><th>TET eligibility</th><th>Evaluated price</th><th>Price rank</th><th>Technical score /100</th><th>CET score /100</th><th>Overall score</th></tr></thead><tbody>${rows||'<tr><td colspan="7">No bidder assessment data extracted.</td></tr>'}</tbody></table></div>${blockers?`<div class="award-blockers"><h4>Information still required before a final recommendation</h4><ul>${blockers}</ul></div>`:''}${notes?`<details class="award-notes"><summary>Governance and manual notes</summary><ul>${notes}</ul></details>`:''}<a class="xl" href="/api/download/${j.job}/award">⬇ Download Award Assessment Excel</a></div>`;
+}
+
 panel(document.getElementById('p-all'),'all');
 document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('.tabs button').forEach(x=>x.classList.toggle('on',x===b));
