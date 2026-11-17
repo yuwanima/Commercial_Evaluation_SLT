@@ -93,6 +93,10 @@ def technical_closing_date(evals):
 
 @app.get("/")
 def index():
+    return send_from_directory(FRONTEND_DIR, "main.html")
+
+@app.get("/commercial-evaluation")
+def commercial_evaluation():
     return send_from_directory(FRONTEND_DIR, "index.html")
 
 @app.post("/api/process")
