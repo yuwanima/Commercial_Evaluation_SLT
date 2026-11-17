@@ -44,10 +44,10 @@ def _recommendation_table(all_bidders, not_eligible, bids):
         headers = bids["headers"][1:]
         for row in bids["rows"]:
             if row and C.clean(row[0]):
-                bid_values[C.clean(row[0]).lower()] = row[1:]
+                bid_values[_bidder_match_key(C.clean(row[0]))] = row[1:]
     table = []
     for bidder in all_bidders:
-        values = bid_values.get(bidder.lower(), [])
+        values = bid_values.get(_bidder_match_key(bidder), [])
         headers = bids["headers"][1:] if bids else []
         table.append({
             "bidder": bidder,
@@ -93,6 +93,114 @@ def _recommendation_table(all_bidders, not_eligible, bids):
             item["more_suitable"] = f"{rank} place"
     return table
 
+
+def _parse_amount_currency(value):
+    """Parse a quoted amount without guessing a currency that is not stated."""
+    raw = C.clean_multiline(value)
+    currency_match = re.search(r"(?i)\b(LKR|Rs\.?|USD|EUR|GBP|JPY|CNY|INR|AUD|SGD|CHF|AED)\b|US\s*\$|[$€£₹]", raw)
+    currency = ""
+    if currency_match:
+        token = currency_match.group(0).upper().replace(" ", "")
+        currency = {"RS": "LKR", "RS.": "LKR", "$": "USD", "US$": "USD", "€": "EUR", "£": "GBP", "₹": "INR"}.get(token, token)
+    cleaned = re.sub(r"(?i)\b(LKR|Rs\.?|USD|EUR|GBP|JPY|CNY|INR|AUD|SGD|CHF|AED)\b|US\s*\$|[$€£₹,\s]", "", raw)
+    match = re.search(r"-?\d+(?:\.\d+)?", cleaned)
+    amount = float(match.group(0)) if match else None
+    return amount, currency
+
+
+def _extract_commercial_prices(tables):
+    """Extract explicit bidder/quoted-total tables from a TET report as fallback evidence."""
+    found = []
+    for rows in tables:
+        cleaned = [[C.clean_multiline(cell) for cell in row] for row in rows]
+        for header_index, header in enumerate(cleaned[:4]):
+            bidder_col = next((i for i, cell in enumerate(header)
+                               if re.search(r"\b(bidder|tenderer|supplier|vendor|company)\b", cell, re.I)), None)
+            total_col = next((i for i, cell in enumerate(header)
+                              if re.search(r"quoted\s+total|evaluated\s+total|(quoted|evaluated|tender|bid|total).*(price|amount|cost)|(price|amount|cost).*(quoted|evaluated|total)", cell, re.I)), None)
+            if bidder_col is None or total_col is None:
+                continue
+            for row in cleaned[header_index + 1:]:
+                if max(bidder_col, total_col) >= len(row):
+                    continue
+                bidder = C.clean(row[bidder_col])
+                raw_amount = C.clean(row[total_col])
+                if not bidder or not raw_amount or re.search(r"\b(total|grand total)\b", bidder, re.I):
+                    continue
+                amount, currency = _parse_amount_currency(raw_amount)
+                if amount is not None and amount > 0:
+                    found.append({"bidder": bidder, "amount": amount, "currency": currency,
+                                  "raw_amount": raw_amount, "source": "TET report quoted-total table"})
+            if found:
+                return found
+    return found
+
+
+def _extract_technical_scores(tables):
+    """Extract explicit numeric technical scores; compliance labels are not converted to marks."""
+    scores = {}
+    for rows in tables:
+        cleaned = [[C.clean_multiline(cell) for cell in row] for row in rows]
+        for header_index, header in enumerate(cleaned[:4]):
+            bidder_col = next((i for i, cell in enumerate(header)
+                               if re.search(r"\b(bidder|tenderer|supplier|vendor|company)\b", cell, re.I)), None)
+            score_col = next((i for i, cell in enumerate(header)
+                              if re.search(r"technical.*score|score.*technical|technical.*marks|marks.*technical", cell, re.I)), None)
+            if bidder_col is None or score_col is None:
+                continue
+            max_col = next((i for i, cell in enumerate(header)
+                            if re.search(r"(max|maximum).*(score|marks)|(score|marks).*(max|maximum)", cell, re.I)), None)
+            for row in cleaned[header_index + 1:]:
+                if max(bidder_col, score_col) >= len(row):
+                    continue
+                bidder = C.clean(row[bidder_col])
+                raw_score = C.clean(row[score_col])
+                if not bidder or not raw_score:
+                    continue
+                ratio = re.search(r"(-?\d+(?:\.\d+)?)\s*/\s*(-?\d+(?:\.\d+)?)", raw_score)
+                if ratio and float(ratio.group(2)) > 0:
+                    score = float(ratio.group(1)) / float(ratio.group(2)) * 100
+                else:
+                    numeric = re.search(r"-?\d+(?:\.\d+)?", raw_score.replace(",", ""))
+                    if not numeric:
+                        continue
+                    score = float(numeric.group(0))
+                    if max_col is not None and max_col < len(row):
+                        maximum = re.search(r"\d+(?:\.\d+)?", row[max_col].replace(",", ""))
+                        if maximum and float(maximum.group(0)) > 0:
+                            score = score / float(maximum.group(0)) * 100
+                if 0 <= score <= 100:
+                    scores[bidder] = round(score, 4)
+    return scores
+
+
+def _bidder_match_key(value):
+    words = re.findall(r"[a-z0-9]+", str(value or "").casefold().replace("&", " and "))
+    suffixes = {("private", "limited"), ("private", "ltd"), ("pvt", "limited"),
+                ("pvt", "ltd"), ("limited",), ("ltd",), ("plc",),
+                ("incorporated",), ("inc",), ("llc",), ("company",), ("co",)}
+    changed = True
+    while words and changed:
+        changed = False
+        for suffix in sorted(suffixes, key=len, reverse=True):
+            if len(words) >= len(suffix) and tuple(words[-len(suffix):]) == suffix:
+                words = words[:-len(suffix)]
+                changed = True
+                break
+    return "".join(words)
+
+
+def _technical_verdict(value):
+    """Return 'eligible', 'excluded', or None from an explicit overall qualification statement."""
+    text = C.clean(value).casefold()
+    if not text:
+        return None
+    if re.search(r"not\s+(?:technically\s+)?qualif|disqualif|not eligible|failed|fail(?:ed)?|reject(?:ed)?", text):
+        return "excluded"
+    if re.search(r"technically\s+qualified|qualified|eligible|proceed|pass(?:ed)?|responsive", text):
+        return "eligible"
+    return None
+
 def _is_status(t):
     return bool(STATUS_START.match(C.clean(t)))
 
@@ -127,7 +235,18 @@ def _bid_details(rows):
         if status_count >= 2 and status_share >= 0.6:
             continue
         width = len(headers)
-        return dict(headers=headers, rows=[(row + [""] * width)[:width] for row in body])
+        normalized_rows = [(row + [""] * width)[:width] for row in body]
+        bidder_col = next((i for i, value in enumerate(headers)
+                           if re.search(r"\b(bidder|tenderer|supplier|vendor|company)\b", value, re.I)), 0)
+        # Downstream evaluation/report code expects the bidder name in column zero.
+        # Some official-style bidder tables place S/No before the Bidder column.
+        if bidder_col:
+            headers = [headers[bidder_col]] + headers[:bidder_col] + headers[bidder_col + 1:]
+            normalized_rows = [
+                [row[bidder_col]] + row[:bidder_col] + row[bidder_col + 1:]
+                for row in normalized_rows
+            ]
+        return dict(headers=headers, rows=normalized_rows)
     return None
 
 # ----------------------------------------------------------------------------- parsing
@@ -201,64 +320,138 @@ def parse_eval(path):
                 cur["rows"].append((area, vals))
     if not matrices:
         raise ValueError("no compliance matrix (Evaluation Area x bidders) found in this report")
-    return dict(type=rtype, title=title, meta=meta, bids=bids, matrices=matrices)
+    return dict(
+        type=rtype, title=title, meta=meta, bids=bids, matrices=matrices,
+        commercial_prices=_extract_commercial_prices(tables),
+        technical_scores=_extract_technical_scores(tables),
+    )
 
 def eval_to_json(label, ev):
     def cell(t):
         return dict(t=t, c=status_class(t))
-    all_bidders, not_eligible = [], set()
-    issues = {}
-    stated_results = {}
-    for m in ev["matrices"]:
-        for bn in m["headers"][1:]:
-            if bn not in all_bidders:
-                all_bidders.append(bn)
-            issues.setdefault(bn, [])
-            stated_results.setdefault(bn, [])
-        for area, vals in m["rows"]:
-            for j, v in enumerate(vals):
-                if j + 1 < len(m["headers"]) and _is_ineligible_status(v):
-                    issues[m["headers"][1 + j]].append(dict(area=area, status=v))
-                if _is_ineligible_status(v) and j + 1 < len(m["headers"]):
-                    not_eligible.add(m["headers"][1 + j])
-        if m["overall"]:
-            for j, v in enumerate(m["overall"]):
-                if j + 1 < len(m["headers"]) and v:
-                    stated_results[m["headers"][1 + j]].append(v)
-                    if _is_ineligible_status(v):
-                        issues[m["headers"][1 + j]].append(dict(area="Overall result", status=v))
-                        not_eligible.add(m["headers"][1 + j])
-    # Some reports list a bidder in the bid-details table but omit that bidder
-    # from one or more compliance matrices. Keep recommendation data complete
-    # for every bidder the report actually names (including Excel output).
-    if ev["bids"]:
-        for row in ev["bids"]["rows"]:
+
+    all_bidders, issues, stated_results, mandatory_issues = [], {}, {}, {}
+    explicit_results = {}
+    criterion_results = {}
+
+    def ensure(bidder):
+        if bidder and bidder not in all_bidders:
+            all_bidders.append(bidder)
+        issues.setdefault(bidder, [])
+        stated_results.setdefault(bidder, [])
+        mandatory_issues.setdefault(bidder, [])
+        explicit_results.setdefault(bidder, [])
+        criterion_results.setdefault(bidder, [])
+
+    for matrix in ev["matrices"]:
+        for bidder in matrix["headers"][1:]:
+            ensure(bidder)
+        for area, values in matrix["rows"]:
+            mandatory = bool(re.search(r"\bmandatory\b|drop[ -]?dead|\[(?:M|MANDATORY)\]|\((?:M|MANDATORY)\)", area, re.I))
+            for index, value in enumerate(values):
+                if index + 1 >= len(matrix["headers"]):
+                    continue
+                bidder = matrix["headers"][index + 1]
+                status = status_class(value)
+                if status in ("bad", "partial"):
+                    issue = dict(area=area, status=value)
+                    issues[bidder].append(issue)
+                    criterion_results[bidder].append(status)
+                    if mandatory and status == "bad":
+                        mandatory_issues[bidder].append(issue)
+                elif status == "ok":
+                    criterion_results[bidder].append(status)
+
+        if matrix["overall"]:
+            for index, value in enumerate(matrix["overall"]):
+                if index + 1 >= len(matrix["headers"]) or not C.clean(value):
+                    continue
+                bidder = matrix["headers"][index + 1]
+                stated_results[bidder].append(value)
+                verdict = _technical_verdict(value)
+                if verdict:
+                    explicit_results[bidder].append(verdict)
+                if verdict == "excluded":
+                    issues[bidder].append(dict(area="Overall result", status=value))
+
+    # Retain every bidder named in the TET report's bidder-details table.
+    if ev.get("bids"):
+        headers = ev["bids"].get("headers", [])
+        status_columns = [i for i, header in enumerate(headers)
+                          if re.search(r"technical.*status|overall.*result|qualification.*status|evaluation.*result", header, re.I)]
+        for row in ev["bids"].get("rows", []):
             bidder = C.clean(row[0]) if row else ""
-            if bidder and bidder not in all_bidders:
-                all_bidders.append(bidder)
-                issues.setdefault(bidder, [])
-                stated_results.setdefault(bidder, [])
-    shortlist = dict(eligible=[b for b in all_bidders if b not in not_eligible],
-                     excluded=[b for b in all_bidders if b in not_eligible])
-    recommendations = [
-        dict(
-            bidder=bidder,
-            eligible=bidder not in not_eligible,
-            recommendation="Proceed to commercial evaluation" if bidder not in not_eligible else "Do not proceed to commercial evaluation",
-            stated_results=stated_results[bidder],
-            issues=issues[bidder],
-        )
-        for bidder in all_bidders
-    ]
-    recommendation_table = _recommendation_table(all_bidders, not_eligible, ev["bids"])
-    return dict(label=label, type=ev["type"], title=ev["title"], meta=ev["meta"], bids=ev["bids"],
-                shortlist=shortlist, recommendations=recommendations,
-                recommendation_table=recommendation_table,
-                matrices=[dict(headers=m["headers"],
-                               rows=[dict(area=a, cells=[cell(v) for v in vals]) for a, vals in m["rows"]],
-                               overall=[cell(v) for v in m["overall"]] if m["overall"] else None,
-                               eligible=[(m["headers"][1 + j] not in not_eligible) for j in range(len(m["headers"]) - 1)])
-                          for m in ev["matrices"]])
+            if not bidder:
+                continue
+            existing = next((name for name in all_bidders
+                             if _bidder_match_key(name) == _bidder_match_key(bidder)), None)
+            canonical_bidder = existing or bidder
+            ensure(canonical_bidder)
+            for col in status_columns:
+                if col < len(row):
+                    verdict = _technical_verdict(row[col])
+                    if verdict:
+                        explicit_results[canonical_bidder].append(verdict)
+                        stated_results[canonical_bidder].append(row[col])
+
+    recommendations = []
+    eligible, excluded, review = [], [], []
+    for bidder in all_bidders:
+        results = set(explicit_results[bidder])
+        has_conflict = len(results) > 1
+        if mandatory_issues[bidder]:
+            eligibility_status = "excluded"
+            reason = "Failed an explicitly identified mandatory/drop-dead criterion."
+        elif has_conflict:
+            eligibility_status = "review_required"
+            reason = "The report contains conflicting overall qualification statements."
+        elif results == {"excluded"}:
+            eligibility_status = "excluded"
+            reason = "The TET report explicitly records the bidder as not qualified/disqualified."
+        elif results == {"eligible"}:
+            eligibility_status = "eligible"
+            reason = "The TET report explicitly records the bidder as technically qualified."
+        elif criterion_results[bidder] and all(x == "ok" for x in criterion_results[bidder]):
+            eligibility_status = "eligible"
+            reason = "All extracted technical compliance entries are marked compliant; no separate overall result was found."
+        else:
+            eligibility_status = "review_required"
+            reason = "The report does not provide enough explicit information to confirm technical eligibility; review the TET decision."
+
+        if eligibility_status == "eligible":
+            eligible.append(bidder)
+            recommendation = "Proceed to commercial evaluation"
+        elif eligibility_status == "excluded":
+            excluded.append(bidder)
+            recommendation = "Do not proceed to commercial evaluation"
+        else:
+            review.append(bidder)
+            recommendation = "Manual TET review required before commercial evaluation"
+
+        technical_score = next((score for name, score in (ev.get("technical_scores") or {}).items()
+                                if _bidder_match_key(name) == _bidder_match_key(bidder)), None)
+        recommendations.append(dict(
+            bidder=bidder, eligible=eligibility_status == "eligible",
+            eligibility_status=eligibility_status, eligibility_reason=reason,
+            technical_score=technical_score,
+            recommendation=recommendation, stated_results=stated_results[bidder],
+            issues=issues[bidder], mandatory_issues=mandatory_issues[bidder],
+        ))
+
+    recommendation_table = _recommendation_table(all_bidders, set(excluded + review), ev.get("bids"))
+    return dict(
+        label=label, type=ev["type"], title=ev["title"], meta=ev["meta"], bids=ev.get("bids"),
+        shortlist=dict(eligible=eligible, excluded=excluded, review_required=review),
+        recommendations=recommendations, recommendation_table=recommendation_table,
+        commercial_prices=ev.get("commercial_prices", []), technical_scores=ev.get("technical_scores", {}),
+        matrices=[dict(headers=m["headers"],
+                       rows=[dict(area=a, cells=[cell(v) for v in vals]) for a, vals in m["rows"]],
+                       overall=[cell(v) for v in m["overall"]] if m["overall"] else None,
+                       eligible=[next((r["eligibility_status"] == "eligible" for r in recommendations
+                                       if _bidder_match_key(r["bidder"]) == _bidder_match_key(m["headers"][1 + j])), False)
+                                 for j in range(len(m["headers"]) - 1)])
+                for m in ev["matrices"]],
+    )
 
 # ----------------------------------------------------------------------------- Excel
 OK, BAD, PART, PEND = "C6EFCE", "FFC7CE", "FFEB9C", "FFF2CC"
@@ -310,7 +503,11 @@ def build_eval_workbook(evals, out):
         ws["A2"].font = Font(italic=True, color="595959")
         r = 4
         nc_rows = []
-        not_eligible = set()      # bidders with >=1 non-complied item, across all matrices in this report
+        eligibility_records = eval_to_json(label, ev)["recommendations"]
+        eligibility_by_name = {_bidder_match_key(item["bidder"]): item
+                               for item in eligibility_records}
+        # A non-mandatory issue is not an automatic disqualification. Only bidders that
+        # the TET report excludes, or whose status needs review, are held from price opening.
         all_bidders = []
         first_header_row = r
         for mx in ev["matrices"]:
@@ -337,7 +534,6 @@ def build_eval_workbook(evals, out):
                     C.body(ws, r, 2 + j, v, center=True)
                     if _is_ineligible_status(v):
                         nc_rows.append((mx["headers"][1 + j], area, v))
-                        not_eligible.add(mx["headers"][1 + j])
                 r += 1
             last = r - 1
             if last >= first:
@@ -355,7 +551,6 @@ def build_eval_workbook(evals, out):
                 y = C.body(ws, r, 2 + j, v, bold=True, center=True)
                 if _is_ineligible_status(v):
                     nc_rows.append((mx["headers"][1 + j], "Overall result", v))
-                    not_eligible.add(mx["headers"][1 + j])
             dvo.add(f"B{ovr}:{L(1 + n)}{ovr}")
             _cf(ws, f"B{ovr}:{L(1 + n)}{ovr}", f"B{ovr}", "overall")
             r += 2
@@ -370,25 +565,28 @@ def build_eval_workbook(evals, out):
                     col = L(2 + j)
                     C.body(ws, r, 2 + j, "=" + f.format(c=col, a=first, b=max(last, first)), bold=True, center=True)
                 r += 1
-            # Partial compliance is accepted; only non-compliance or a disqualified overall
-            # result excludes the bidder from commercial evaluation.
+            # Eligibility follows the explicit TET overall result and mandatory/drop-dead
+            # criteria; other issues remain visible for the evaluator's documented review.
             elig_row = r
             C.body(ws, r, 1, "Eligible for Commercial Evaluation", bold=True)
             for j in range(n):
-                col = L(2 + j)
-                x = C.body(ws, r, 2 + j,
-                           f'=IF(OR({col}{srow+2}>0,LEFT({col}{ovr},4)="Disq"),"No — excluded (non-compliance)","Yes — proceed")',
-                           bold=True, center=True)
+                bidder = mx["headers"][1 + j]
+                record = eligibility_by_name.get(_bidder_match_key(bidder), {})
+                status = record.get("eligibility_status", "review_required")
+                value = ("Yes — proceed" if status == "eligible" else
+                         "No — excluded" if status == "excluded" else
+                         "Review — TET decision required")
+                C.body(ws, r, 2 + j, value, bold=True, center=True)
             _cf_eligible(ws, f"B{elig_row}:{L(1+n)}{elig_row}", f"B{elig_row}")
             r += 1
-            C.body(ws, r, 1, "Flag: report's stated result conflicts with compliance", bold=False)
+            C.body(ws, r, 1, "Flag: eligibility evidence / TET review", bold=False)
             for j in range(n):
-                col = L(2 + j)
-                x = C.body(ws, r, 2 + j,
-                           f'=IF(AND(LEFT({col}{ovr},4)="Qual",LEFT({col}{elig_row},2)="No"),"Report says Qualified but has non-compliance — check",'
-                           f'IF(AND(LEFT({col}{ovr},4)="Disq",LEFT({col}{elig_row},3)="Yes"),"Report says Disqualified with no non-compliance — check",""))',
-                           center=True)
-                x.font = Font(italic=True, size=9, color="B42318")
+                bidder = mx["headers"][1 + j]
+                record = eligibility_by_name.get(_bidder_match_key(bidder), {})
+                flag = record.get("eligibility_reason", "") if record.get("eligibility_status") != "eligible" else ""
+                x = C.body(ws, r, 2 + j, flag, center=True)
+                if flag:
+                    x.font = Font(italic=True, size=9, color="B42318")
             r += 3
         # ---- editable recommendation table
         C.body(ws, r, 1, "Recommendations for Commercial Evaluation", bold=True)
@@ -398,6 +596,12 @@ def build_eval_workbook(evals, out):
         for j, bidder in enumerate(all_bidders, 2):
             C.hcell(ws, r, j, bidder)
         r += 1
+        not_eligible = {
+            bidder for bidder in all_bidders
+            if not any(item["eligibility_status"] == "eligible"
+                       and _bidder_match_key(item["bidder"]) == _bidder_match_key(bidder)
+                       for item in eligibility_records)
+        }
         recommendation_table = _recommendation_table(all_bidders, not_eligible, ev["bids"])
         recommendation_rows = [
             ("Recommended for Financial Bid Opening (Yes/No)",
