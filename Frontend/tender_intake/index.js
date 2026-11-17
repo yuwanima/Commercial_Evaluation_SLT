@@ -119,8 +119,7 @@ function allBox(j,probs){
   const evaluationDetails=evaluations.map((ev,i)=>`<details class="result-details"><summary>${esc(ev.label||`Technical report ${i+1}`)}</summary>${evBox(j)(ev,i)}</details>`).join('');
   const evaluationSection=evaluations.length?`<div class="all-section"><h2>Technical Evaluation</h2>${evaluationDetails}</div>`:`<div class="all-section empty-section"><h2>Technical Evaluation</h2><p>No technical evaluation reports detected.</p></div>`;
   const priceSection=j.price?`<div class="all-section"><h2>Price Schedule</h2><details class="result-details" open><summary>View all price results (${priceRows.length})</summary>${priceBox(j,'')}</details></div>`:`<div class="all-section empty-section"><h2>Price Schedule</h2><p>No price schedules detected.</p></div>`;
-  const awardSection=j.award&&j.award_assessment?`<div class="all-section"><h2>Commercial Evaluation & Award Assessment</h2>${awardBox(j)}</div>`:'';
-  return `<div class="all-results">${awardSection}${priceSection}${evaluationSection}${comparison}${probs?`<div class="res">${probs}</div>`:''}</div>`;
+  return `<div class="all-results">${priceSection}${evaluationSection}${comparison}${probs?`<div class="res">${probs}</div>`:''}</div>`;
 }
 
 function evBox(j){return (ev,idx)=>{
@@ -148,9 +147,15 @@ function priceBox(j,probs){
     const rankA=a.rank||999, rankB=b.rank||999;
     return rankA-rankB||String(a.bidder||'').localeCompare(String(b.bidder||''));
   });
-  const body=rows.map(r=>`<tr><td>${esc(r.bidder)}</td><td>${esc(r.currency||'Not stated')}</td><td>${esc(fmtMoney(r.evaluated_total??r.total))}</td><td>${esc(r.rank?`${r.rank}${r.rank===1?'st':r.rank===2?'nd':r.rank===3?'rd':'th'}`:'Not ranked')}</td><td>${esc(r.status||'To be evaluated')}</td></tr>`).join('');
+  const currencyGroups=new Map();
+  rows.forEach(r=>{
+    const currency=String(r.currency||'Not stated');
+    if(!currencyGroups.has(currency))currencyGroups.set(currency,[]);
+    currencyGroups.get(currency).push(r);
+  });
+  const tables=[...currencyGroups].map(([currency,group])=>`<div class="price-currency-group"><h4>Currency: ${esc(currency)}</h4><table class="price-table"><thead><tr><th>Bidder</th><th>Currency</th><th>Evaluated price</th><th>Price rank</th></tr></thead><tbody>${group.map(r=>`<tr><td>${esc(r.bidder)}</td><td>${esc(r.currency||'Not stated')}</td><td>${esc(fmtMoney(r.evaluated_total??r.total))}</td><td>${esc(r.rank?`${r.rank}${r.rank===1?'st':r.rank===2?'nd':r.rank===3?'rd':'th'}`:'Not ranked')}</td></tr>`).join('')}</tbody></table></div>`).join('')||'<table class="price-table"><tbody><tr><td colspan="4">No bidder prices detected.</td></tr></tbody></table>';
   const notes=(j.notes||[]).concat(rows.flatMap(r=>r.warnings||[]));
-  return `<div class="res"><h3>✓ Price schedule extraction ready</h3><div class="price-summary">Extracted bidder price schedules (${rows.length})</div><table class="price-table"><thead><tr><th>Bidder</th><th>Currency</th><th>Evaluated price</th><th>Price rank</th><th>Status</th></tr></thead><tbody>${body||'<tr><td colspan="5">No bidder prices detected.</td></tr>'}</tbody></table>${notes.length?`<ul class="warn">${notes.map(esc).map(x=>`<li>${x}</li>`).join('')}</ul>`:''}<a class="xl" href="/api/download/${j.job}/price">⬇ Download Price Schedules Excel</a>${probs?`<div>${probs}</div>`:''}</div>`;
+  return `<div class="res"><h3>✓ Price schedule extraction ready</h3><div class="price-summary">Extracted bidder price schedules (${rows.length})</div>${tables}${notes.length?`<ul class="warn">${notes.map(esc).map(x=>`<li>${x}</li>`).join('')}</ul>`:''}<a class="xl" href="/api/download/${j.job}/price">⬇ Download Price Schedules Excel</a>${probs?`<div>${probs}</div>`:''}</div>`;
 }
 function awardBox(j){
   const a=j.award_assessment||{};
@@ -160,8 +165,8 @@ function awardBox(j){
   const money=p=>p&&p.amount!==null&&p.amount!==undefined?`${esc(p.currency||'')} ${esc(fmtMoney(p.amount))}`:'Not available';
   const rows=(a.bidders||[]).map(b=>{
     const p=b.price||{};
-    const rank=b.price_rank?`${b.price_rank}${b.price_rank===1?'st':b.price_rank===2?'nd':b.price_rank===3?'rd':'th'}`:'—';
-    return `<tr><td>${esc(b.bidder)}</td><td>${esc((b.eligibility_status||'review_required').replaceAll('_',' '))}</td><td>${money(p)}</td><td>${rank}</td><td>${b.technical_score==null?'—':esc(Number(b.technical_score).toFixed(2))}</td><td>${b.commercial_score==null?'—':esc(Number(b.commercial_score).toFixed(2))}</td><td>${b.overall_score==null?'—':esc(Number(b.overall_score).toFixed(2))}</td></tr>`;
+    const rank=b.price_rank?`${b.price_rank}${b.price_rank===1?'st':b.price_rank===2?'nd':b.price_rank===3?'rd':'th'}${b.price_rank_scope?` (${esc(b.price_rank_scope)})`:''}`:'—';
+    return `<tr><td>${esc(b.bidder)}</td><td>${esc((b.eligibility_status||'review_required').replaceAll('_',' '))}</td><td>${money(p)}</td><td>${rank}</td><td>${b.technical_score==null?'Not provided':esc(Number(b.technical_score).toFixed(2))}</td><td>${b.commercial_score==null?'Not provided':esc(Number(b.commercial_score).toFixed(2))}</td><td>${b.overall_score==null?'Not calculated':esc(Number(b.overall_score).toFixed(2))}</td></tr>`;
   }).join('');
   const weights=a.weights&&a.weights.technical!==undefined&&a.weights.commercial!==undefined?`Technical ${esc(a.weights.technical)}% / Commercial ${esc(a.weights.commercial)}% (${a.weights.approved?'approval evidence found':'approval not verified'})`:'Not found in uploaded approved strategy documents';
   const blockers=(a.blockers||[]).map(x=>`<li>${esc(x)}</li>`).join('');

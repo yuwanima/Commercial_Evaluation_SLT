@@ -453,17 +453,31 @@ def build_award_assessment(evaluations, price_rows, source_metadata=None):
     commission_review = any(b.get("price", {}).get("commission_review_required")
                             for b in bidders if b.get("price"))
 
-    if one_currency and all_eligible_priced:
-        lowest = min(b["price"]["amount"] for b in comparable)
-        ranked = sorted(comparable, key=lambda b: (b["price"]["amount"], bidder_key(b["bidder"])))
-        last_amount, rank = None, 0
-        for position, bidder in enumerate(ranked, 1):
-            amount = bidder["price"]["amount"]
-            if amount != last_amount:
-                rank = position
-                last_amount = amount
-            bidder["price_rank"] = rank
-            bidder["normalized_price_score"] = round((lowest / amount) * 100, 4) if amount else None
+    # Price ranks remain useful within each currency even when a direct
+    # cross-currency comparison is not possible.  Previously the award table
+    # left every rank blank as soon as one bidder quoted in a different
+    # currency, although the price schedule correctly showed per-currency
+    # ranks.  Keep the rank scope explicit so it cannot be mistaken for a
+    # cross-currency ranking.
+    if all_eligible_priced:
+        for currency in sorted(currencies):
+            currency_bidders = sorted(
+                (b for b in comparable if b["price"]["currency"] == currency),
+                key=lambda b: (b["price"]["amount"], bidder_key(b["bidder"])),
+            )
+            last_amount, rank = None, 0
+            for position, bidder in enumerate(currency_bidders, 1):
+                amount = bidder["price"]["amount"]
+                if amount != last_amount:
+                    rank = position
+                    last_amount = amount
+                bidder["price_rank"] = rank
+                bidder["price_rank_scope"] = currency
+        if one_currency:
+            lowest = min(b["price"]["amount"] for b in comparable)
+            for bidder in comparable:
+                amount = bidder["price"]["amount"]
+                bidder["normalized_price_score"] = round((lowest / amount) * 100, 4) if amount else None
 
     weights = metadata.get("weights")
     weights_valid = bool(weights and weights.get("valid") and weights.get("approved"))
