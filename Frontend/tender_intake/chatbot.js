@@ -48,7 +48,7 @@ let complianceBarChart = null;
     const uploadFileCount = document.getElementById("upload-file-count");
 
     const questionEndpoint = form.dataset.endpoint;
-    const uploadEndpoint = uploadForm.dataset.endpoint;
+    const uploadEndpoint = uploadForm?.dataset.endpoint;
     // Keep the currently active vendor document submission.
     let activeSubmissionId = null;
     let isProcessing = false;
@@ -272,7 +272,7 @@ form.addEventListener("submit", async (event) => {
     });
 
     // Display selected vendor files
-    fileInput.addEventListener("change", () => {
+    fileInput?.addEventListener("change", () => {
         const files = Array.from(fileInput.files);
 
         uploadFileCount.textContent =
@@ -294,7 +294,7 @@ form.addEventListener("submit", async (event) => {
     });
 
     // Vendor document upload and processing
-    uploadForm.addEventListener("submit", async (event) => {
+    uploadForm?.addEventListener("submit", async (event) => {
         event.preventDefault();
 
         const files = Array.from(fileInput.files);
