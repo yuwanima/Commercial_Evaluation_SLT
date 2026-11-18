@@ -13,7 +13,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from goods_services import consolidate as C
 
 STATUS_START = re.compile(
-    r"^\s*((fully|partially|not|non)[\s-]*)?(complied|compliant|complies|compliance)\b"
+    r"^\s*((fully|partially|not|non)[\s-]*)?(comply|complied|compliant|complies|compliance)\b"
     r"|^\s*(yes|no|n/?a|pass|fail|partial|qualified|disqualified|not qualified)\b|^\s*[✓✔√✗✘×]|^\s*does not comply", re.I)
 OVERALL_ROW = re.compile(r"overall|final result|^result|recommend|qualif", re.I)
 
@@ -25,6 +25,8 @@ def status_class(t):
         return "bad"
     if "partial" in t:
         return "partial"
+    if re.search(r"\bcomply\b", t):
+        return "ok"
     if re.search(r"complied|compliant|complies|^yes|^pass|^qualified|[✓✔√]", t):
         return "ok"
     return "other"
@@ -171,6 +173,74 @@ def _extract_technical_scores(tables):
                             score = score / float(maximum.group(0)) * 100
                 if 0 <= score <= 100:
                     scores[bidder] = round(score, 4)
+    return scores
+
+
+# A technical report often contains only compliance labels, even though the
+# decision makers still need a comparable technical score for every bidder.
+# These are the marks prescribed by the SLT procurement manual.  The final
+# comparable score is normalized to /100 below, but these marks are the actual
+# values used for every compliance criterion.
+MAX_COMPLIANCE_MARK = 10.0
+COMPLIANCE_SCORE = {
+    "ok": 10.0,
+    "partial": 5.0,
+    "bad": 0.0,
+}
+
+
+def _calculated_technical_scores(matrices):
+    """Calculate a percentage score from explicit matrix compliance labels.
+
+    Blank, N/A and unrecognised cells are omitted from the denominator.  The
+    returned counts make the result auditable in the API and workbook.
+    """
+    stats = {}
+    for matrix in matrices:
+        bidders = matrix.get("headers", [])[1:]
+        for bidder in bidders:
+            stats.setdefault(bidder, {"earned": 0.0, "criteria": 0,
+                                      "complied": 0, "partial": 0,
+                                      "not_complied": 0})
+        for _area, values in matrix.get("rows", []):
+            for index, value in enumerate(values):
+                if index >= len(bidders):
+                    continue
+                status = status_class(value)
+                points = COMPLIANCE_SCORE.get(status)
+                if points is None:
+                    continue
+                item = stats[bidders[index]]
+                item["earned"] += points
+                item["criteria"] += 1
+                item[{"ok": "complied", "partial": "partial",
+                      "bad": "not_complied"}[status]] += 1
+
+    scores = {}
+    for bidder, item in stats.items():
+        criteria = item["criteria"]
+        if criteria:
+            scores[bidder] = {
+                "score": round(item["earned"] / (criteria * MAX_COMPLIANCE_MARK) * 100, 2),
+                "source": "calculated_from_compliance",
+                "marks_earned": round(item["earned"], 2),
+                "maximum_marks": round(criteria * MAX_COMPLIANCE_MARK, 2),
+                "criteria_scored": criteria,
+                "complied": item["complied"],
+                "partially_complied": item["partial"],
+                "not_complied": item["not_complied"],
+            }
+        else:
+            scores[bidder] = {
+                "score": None,
+                "source": "not_available",
+                "marks_earned": 0,
+                "maximum_marks": 0,
+                "criteria_scored": 0,
+                "complied": 0,
+                "partially_complied": 0,
+                "not_complied": 0,
+            }
     return scores
 
 
@@ -394,6 +464,30 @@ def eval_to_json(label, ev):
                         explicit_results[canonical_bidder].append(verdict)
                         stated_results[canonical_bidder].append(row[col])
 
+    calculated_scores = _calculated_technical_scores(ev["matrices"])
+    reported_scores = ev.get("technical_scores") or {}
+
+    def score_for(bidder):
+        reported = next((score for name, score in reported_scores.items()
+                         if _bidder_match_key(name) == _bidder_match_key(bidder)), None)
+        if reported is not None:
+            calculated = calculated_scores.get(bidder, {})
+            return {
+                "score": reported,
+                "source": "reported_in_technical_report",
+                "marks_earned": calculated.get("marks_earned", 0),
+                "maximum_marks": calculated.get("maximum_marks", 0),
+                "criteria_scored": calculated.get("criteria_scored", 0),
+                "complied": calculated.get("complied", 0),
+                "partially_complied": calculated.get("partially_complied", 0),
+                "not_complied": calculated.get("not_complied", 0),
+            }
+        return calculated_scores.get(bidder, {
+            "score": None, "source": "not_available", "marks_earned": 0,
+            "maximum_marks": 0, "criteria_scored": 0,
+            "complied": 0, "partially_complied": 0, "not_complied": 0,
+        })
+
     recommendations = []
     eligible, excluded, review = [], [], []
     for bidder in all_bidders:
@@ -428,12 +522,18 @@ def eval_to_json(label, ev):
             review.append(bidder)
             recommendation = "Manual TET review required before commercial evaluation"
 
-        technical_score = next((score for name, score in (ev.get("technical_scores") or {}).items()
-                                if _bidder_match_key(name) == _bidder_match_key(bidder)), None)
+        technical_score_details = score_for(bidder)
         recommendations.append(dict(
             bidder=bidder, eligible=eligibility_status == "eligible",
             eligibility_status=eligibility_status, eligibility_reason=reason,
-            technical_score=technical_score,
+            technical_score=technical_score_details["score"],
+            technical_score_source=technical_score_details["source"],
+            technical_marks=technical_score_details["marks_earned"],
+            maximum_technical_marks=technical_score_details["maximum_marks"],
+            criteria_scored=technical_score_details["criteria_scored"],
+            complied=technical_score_details["complied"],
+            partially_complied=technical_score_details["partially_complied"],
+            not_complied=technical_score_details["not_complied"],
             recommendation=recommendation, stated_results=stated_results[bidder],
             issues=issues[bidder], mandatory_issues=mandatory_issues[bidder],
         ))
@@ -444,6 +544,12 @@ def eval_to_json(label, ev):
         shortlist=dict(eligible=eligible, excluded=excluded, review_required=review),
         recommendations=recommendations, recommendation_table=recommendation_table,
         commercial_prices=ev.get("commercial_prices", []), technical_scores=ev.get("technical_scores", {}),
+        technical_score_basis=(
+            "Explicit numeric technical score from the report when available; "
+            "otherwise calculated using SLT procurement marks: Comply=10, "
+            "Partial Comply=5, Non Comply=0. Blank/N/A/unclear cells are "
+            "excluded; calculated marks are normalized to a score out of 100."
+        ),
         matrices=[dict(headers=m["headers"],
                        rows=[dict(area=a, cells=[cell(v) for v in vals]) for a, vals in m["rows"]],
                        overall=[cell(v) for v in m["overall"]] if m["overall"] else None,
@@ -484,6 +590,43 @@ def _cf_eligible(ws, rng, first):
         ),
     )
 
+def _build_technical_score_sheet(wb, sheet_name, label, records):
+    """Add a dedicated, auditable score summary worksheet."""
+    ws = wb.create_sheet(sheet_name)
+    ws["A1"] = "TECHNICAL EVALUATION SCORES"
+    ws["A1"].font = Font(bold=True, size=14, color=C.NAVY)
+    ws["A2"] = f"Source: {label}"
+    ws["A2"].font = Font(italic=True, color="595959")
+    headers = ["Company", "Technical score /100", "Marks earned", "Maximum marks",
+               "Score source", "Criteria scored", "Comply", "Partial Comply",
+               "Non Comply", "Eligibility"]
+    for column, header in enumerate(headers, 1):
+        C.hcell(ws, 4, column, header)
+    for row_number, record in enumerate(records, 5):
+        source = record.get("technical_score_source")
+        source_text = ("Reported in technical report" if source == "reported_in_technical_report"
+                       else "Calculated from compliance labels" if source == "calculated_from_compliance"
+                       else "Not available")
+        values = [
+            record.get("bidder", ""), record.get("technical_score"),
+            record.get("technical_marks", 0), record.get("maximum_technical_marks", 0),
+            source_text, record.get("criteria_scored", 0), record.get("complied", 0),
+            record.get("partially_complied", 0), record.get("not_complied", 0),
+            record.get("eligibility_status", "review_required").replace("_", " "),
+        ]
+        for column, value in enumerate(values, 1):
+            C.body(ws, row_number, column, value, bold=(column == 1), center=(column > 1))
+    note_row = max(5, 5 + len(records))
+    C.body(ws, note_row, 1, "Scoring basis: Comply=10, Partial Comply=5, Non Comply=0. Blank/N/A/unclear cells are excluded. Explicit numeric report scores take precedence.")
+    ws.merge_cells(start_row=note_row, start_column=1, end_row=note_row, end_column=len(headers))
+    ws.cell(note_row, 1).font = Font(italic=True, size=9, color="595959")
+    widths = [28, 20, 16, 16, 32, 16, 12, 18, 14, 20]
+    for column, width in enumerate(widths, 1):
+        ws.column_dimensions[L(column)].width = width
+    C.finish(ws, "A5")
+    return ws
+
+
 def build_eval_workbook(evals, out):
     """evals: list of (label, parsed_report)."""
     wb = Workbook()
@@ -504,6 +647,12 @@ def build_eval_workbook(evals, out):
         r = 4
         nc_rows = []
         eligibility_records = eval_to_json(label, ev)["recommendations"]
+        _build_technical_score_sheet(
+            wb,
+            C.safe_sheet((f"R{idx} " if multi else "") + "Technical Scores", used),
+            label,
+            eligibility_records,
+        )
         eligibility_by_name = {_bidder_match_key(item["bidder"]): item
                                for item in eligibility_records}
         # A non-mandatory issue is not an automatic disqualification. Only bidders that

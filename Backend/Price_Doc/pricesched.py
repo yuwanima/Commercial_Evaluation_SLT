@@ -48,6 +48,14 @@ except ImportError:
         from Backend.Price_Doc.cbsl_web_rate import web_rate as cbsl_web_rate
 
 try:
+    from ..commercial_price import calculate_commercial_price_scores
+except ImportError:
+    try:
+        from commercial_price import calculate_commercial_price_scores
+    except ImportError:                        # pragma: no cover - direct CLI use
+        from Backend.commercial_price import calculate_commercial_price_scores
+
+try:
     import docx  # type: ignore[reportMissingImports]
 except ImportError:                                   # pragma: no cover
     docx = None
@@ -1057,6 +1065,9 @@ def rank_rows(res):
         groups.setdefault(r["currency"], []).append(r)
     for cur, lst in groups.items():
         priced = sorted((r for r in lst if r["total"] > 0), key=lambda r: r["total"])
+        score_rows = calculate_commercial_price_scores(
+            {r["bidder"]: r["evaluated_total"] for r in priced}
+        ) if priced else {}
         place, prev = 0, None
         for k, r in enumerate(priced, 1):
             if r["total"] != prev:
@@ -1064,10 +1075,14 @@ def rank_rows(res):
             tie = sum(1 for x in priced if x["total"] == r["total"]) > 1
             r["rank"] = place
             r["status"] = (f"{_ordinal(place)} — Lowest evaluated price" if place == 1 else _ordinal(place)) + (" (tie)" if tie else "")
+            r["price_score"] = float(score_rows[r["bidder"]]["price_score"])
+            r["weighted_score"] = float(score_rows[r["bidder"]]["weighted_score"])
         for r in lst:
             if r["total"] <= 0:
                 r["rank"] = None
                 r["status"] = "No price found"
+                r["price_score"] = None
+                r["weighted_score"] = None
     res["rows"].sort(key=lambda r: (list(groups).index(r["currency"]), r["rank"] is None, r["rank"] or 0, r["bidder"].lower()))
     if len(groups) > 1:
         res["notes"].append("Prices are in different currencies (" + ", ".join(c or "currency not stated" for c in groups) +
