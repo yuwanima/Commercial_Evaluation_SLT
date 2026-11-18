@@ -137,7 +137,7 @@ function evBox(j){return (ev,idx)=>{
     m.rows.map(r=>`<tr><td>${esc(r.area)}</td>${r.cells.map(c=>`<td class="${c.c}">${esc(c.t)}</td>`).join('')}</tr>`).join('')+
     (m.overall?`<tr class="ov"><td>Overall result (as stated in report)</td>${m.overall.map(c=>`<td class="${c.c}">${esc(c.t)}</td>`).join('')}</tr>`:'')+
     `</tbody></table></div>`).join('<br>');
-  return `<div class="evalbox"><h3>${ev.type==='SSET'?'Sole Source Evaluation':'Technical Evaluation'} — compliance by company</h3><div class="meta">File: ${esc(ev.label)}</div><div class="report-details"><h4>Report details</h4>${metaRows||'<div class="meta">No additional report details were detected.</div>'}</div><div class="recommendations">${bidDetails||'<h4>Details of Bidders</h4><div class="meta">No bidder details were detected.</div>'}</div>${mats}${reasons}
+  return `<div class="evalbox"><h3>${ev.type==='SSET'?'Sole Source Evaluation':'Technical Evaluation'} — Tender No: ${esc(tender)}</h3><div class="meta">File: ${esc(ev.label)}</div><div class="report-details"><h4>Report details</h4>${metaRows||'<div class="meta">No additional report details were detected.</div>'}</div><div class="recommendations">${bidDetails||'<h4>Details of Bidders</h4><div class="meta">No bidder details were detected.</div>'}</div>${mats}${reasons}
     ${idx===0?`<a class="xl" href="/api/download/${j.job}/eval">⬇ Download Excel (Tender No: ${esc(tender)})</a>`:''}</div>`}}
 function fmtMoney(value){
   return value===null||value===undefined||!Number.isFinite(Number(value))?'Not available':Number(value).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});

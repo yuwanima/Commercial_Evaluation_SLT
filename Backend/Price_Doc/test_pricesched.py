@@ -1,15 +1,63 @@
+import datetime as dt
 import tempfile
 import unittest
+from io import BytesIO
 from unittest.mock import patch
 from pathlib import Path
 
 from docx import Document
+from openpyxl import Workbook
 
 from Backend.Price_Doc import pricesched
+from Backend.Price_Doc import cbsl_web_rate
 from Backend.Technical import convert
 
 
 class PriceBidderIdentificationTests(unittest.TestCase):
+    def test_cbsl_parser_returns_latest_rate_for_weekend_or_holiday(self):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(["Date", "Date", "United States", "United States"])
+        sheet.append([None, "2025-08-06", 297.1004, 309.7260])
+        sheet.append([None, "2025-08-07", 298.0000, 310.0000])
+        stream = BytesIO()
+        workbook.save(stream)
+        stream.seek(0)
+
+        rates = cbsl_web_rate.parse_usd(stream)
+        self.assertEqual(rates[dt.date(2025, 8, 6)], (297.1004, 309.726))
+        with patch.object(cbsl_web_rate, "_rates", return_value=rates):
+            result = cbsl_web_rate.web_rate("2025-08-08", "average")
+        self.assertEqual(result["rate_date"], "2025-08-07")
+        self.assertEqual(result["rate"], 304.0)
+
+    def test_exchange_rate_block_uses_cbs_web_rate_for_closing_and_po_dates(self):
+        workbook = Workbook()
+        sheet = workbook.active
+
+        def fake_rate(day, kind):
+            values = {
+                ("2026-05-12", "buy"): 318.5751,
+                ("2026-05-12", "sell"): 326.1274,
+                ("2025-08-06", "buy"): 297.1004,
+                ("2025-08-06", "sell"): 309.726,
+            }
+            return {"rate": values[(day.isoformat(), kind)]}
+
+        with patch.object(pricesched, "cbsl_web_rate", side_effect=fake_rate):
+            pricesched._populate_exchange_rates(
+                sheet,
+                closing_date="12-05-2026",
+                po_dates=["06-08-2025"],
+            )
+
+        self.assertEqual(sheet["R4"].value, "1 USD (Tender Closing Date) = 12-05-26")
+        self.assertEqual(sheet["S5"].value, 318.5751)
+        self.assertEqual(sheet["T5"].value, 326.1274)
+        self.assertEqual(sheet["U5"].value, 322.3513)
+        self.assertEqual(sheet["V4"].value, "PO Date : 06-08-2025")
+        self.assertEqual(sheet["V5"].value, 303.4132)
+
     @staticmethod
     def create_price_document(path, frank_value=None, frank_label="Official Frank", description="Test item"):
         document = Document()
