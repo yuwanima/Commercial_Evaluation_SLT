@@ -40,6 +40,14 @@ except ImportError:
         T = None
 
 try:
+    from .cbsl_web_rate import web_rate as cbsl_web_rate
+except ImportError:
+    try:
+        from Price_Doc.cbsl_web_rate import web_rate as cbsl_web_rate
+    except ImportError:
+        from Backend.Price_Doc.cbsl_web_rate import web_rate as cbsl_web_rate
+
+try:
     import docx  # type: ignore[reportMissingImports]
 except ImportError:                                   # pragma: no cover
     docx = None
@@ -614,12 +622,12 @@ def _report_date(value):
 
 
 def _usd_rate_pair(rate_date):
-    """Return the database buy/sell rates for a date, or ``None`` if unavailable."""
-    if T is None or not rate_date:
+    """Return CBSL web buy/sell rates for a date, or ``None`` if unavailable."""
+    if not rate_date:
         return None
     try:
-        buy = T.rate_on(rate_date.isoformat(), "buy")["rate"]
-        sell = T.rate_on(rate_date.isoformat(), "sell")["rate"]
+        buy = cbsl_web_rate(rate_date, "buy")["rate"]
+        sell = cbsl_web_rate(rate_date, "sell")["rate"]
     except Exception:
         return None
     return float(buy), float(sell)
@@ -664,7 +672,7 @@ def _populate_annexure_sheet(ws, entries, tender="", purchasing="", closing_date
     for column in ("V", "W", "X", "Y", "Z", "AA"):
         ws.column_dimensions[column].hidden = column in ("Y", "Z", "AA")
 
-    # 1. Update Header with Tender No, Purchasing Details, and database rates
+    # 1. Update Header with Tender No, Purchasing Details, and CBSL web rates
     tender_no = tender or next((e.get("tender") for e in entries if e.get("tender")), "")
     purchasing_desc = purchasing or next((e.get("purchasing") for e in entries if e.get("purchasing")), "")
 

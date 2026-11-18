@@ -6,6 +6,7 @@ import os
 BASE = Path(__file__).resolve().parent
 BACKEND_DIR = BASE.parent
 FRONTEND_DIR = BACKEND_DIR.parent / "Frontend" / "tender_intake"
+MAIN_FRONTEND_DIR = BACKEND_DIR.parent / "Frontend" / "Main"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
@@ -93,7 +94,11 @@ def technical_closing_date(evals):
 
 @app.get("/")
 def index():
-    return send_from_directory(FRONTEND_DIR, "main.html")
+    return send_from_directory(MAIN_FRONTEND_DIR, "main.html")
+
+@app.get("/main.css")
+def main_stylesheet():
+    return send_from_directory(MAIN_FRONTEND_DIR, "main.css")
 
 @app.get("/commercial-evaluation")
 def commercial_evaluation():
