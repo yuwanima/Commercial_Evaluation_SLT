@@ -407,6 +407,31 @@ def part_total(kind, items, include_commission=False):
     return total, notes
 
 
+def evaluated_total(kind, items):
+    """Compute the commercial evaluated total for a price schedule.
+
+    Local schedules are evaluated using required quantity multiplied by the
+    unit price with SSCL and without VAT. The quoted total from ``part_total``
+    remains tax-inclusive for traceability.
+    """
+    total = 0.0
+    for item in items:
+        qty = num(item.get("qty")) or 1
+        if kind == "local":
+            unit_excl = num(item.get("unit_excl"))
+            if unit_excl is not None:
+                sscl_rate = num(item.get("sscl")) or 0
+                unit_with_sscl = unit_excl * (1 + sscl_rate / 100)
+            else:
+                # If no tax breakdown exists, retain the only available price.
+                unit_with_sscl = num(item.get("unit_incl"))
+            if unit_with_sscl is not None:
+                total += qty * unit_with_sscl
+        else:
+            total += part_total(kind, [item])[0]
+    return total
+
+
 def _line_money(kind, item):
     """Per-line (unit_price, line_total) the same way the Excel computes it.
 
@@ -524,15 +549,17 @@ def _annexure_rows(entries):
     for entry in entries:
         for item in entry["items"]:
             description = re.sub(r"\s+", " ", _text(item.get("desc"))).strip()
-            key = description.casefold() if description else f"row-{len(descriptions) + 1}"
-            descriptions.setdefault(key, len(descriptions) + 1)
+            if description:
+                descriptions.setdefault(description.casefold(), len(descriptions) + 1)
 
     rows = []
     option_numbers = defaultdict(int)
     for entry in entries:
         for item in entry["items"]:
             description = re.sub(r"\s+", " ", _text(item.get("desc"))).strip()
-            key = description.casefold() if description else f"row-{len(rows) + 1}"
+            if not description:
+                continue
+            key = description.casefold()
             option_numbers[key] += 1
             unit_excl = num(item.get("unit_excl"))
             sscl_amount, vat_amount = _tax_amounts(
@@ -812,6 +839,13 @@ def _populate_annexure_sheet(ws, entries, tender="", purchasing="", closing_date
             else:
                 cell.alignment = Alignment(horizontal="center", vertical="center")
 
+    # The template contains many spare formatted rows (and a few stale helper
+    # cells below them). Remove everything after the populated data rows so the
+    # exported sheet shows exactly one row per extracted item.
+    last_data_row = first_row + len(rows) - 1
+    if ws.max_row > last_data_row:
+        ws.delete_rows(last_data_row + 1, ws.max_row - last_data_row)
+
     _populate_exchange_rates(ws, closing_date, previous_po_dates)
 
     # Rank foreign quotations by CIF and local quotations by tax-inclusive unit price.
@@ -1066,21 +1100,21 @@ def rank_rows(res):
     for r in res["rows"]:
         groups.setdefault(r["currency"], []).append(r)
     for cur, lst in groups.items():
-        priced = sorted((r for r in lst if r["total"] > 0), key=lambda r: r["total"])
+        priced = sorted((r for r in lst if r["evaluated_total"] > 0), key=lambda r: r["evaluated_total"])
         score_rows = calculate_commercial_price_scores(
             {r["bidder"]: r["evaluated_total"] for r in priced}
         ) if priced else {}
         place, prev = 0, None
         for k, r in enumerate(priced, 1):
-            if r["total"] != prev:
-                place, prev = k, r["total"]
-            tie = sum(1 for x in priced if x["total"] == r["total"]) > 1
+            if r["evaluated_total"] != prev:
+                place, prev = k, r["evaluated_total"]
+            tie = sum(1 for x in priced if x["evaluated_total"] == r["evaluated_total"]) > 1
             r["rank"] = place
             r["status"] = (f"{_ordinal(place)} — Lowest evaluated price" if place == 1 else _ordinal(place)) + (" (tie)" if tie else "")
             r["price_score"] = float(score_rows[r["bidder"]]["price_score"])
             r["weighted_score"] = float(score_rows[r["bidder"]]["weighted_score"])
         for r in lst:
-            if r["total"] <= 0:
+            if r["evaluated_total"] <= 0:
                 r["rank"] = None
                 r["status"] = "No price found"
                 r["price_score"] = None
@@ -1154,7 +1188,7 @@ def run(inputs, out, closing_date=None):
                 unit_price_excl_taxes=None, unit_price_incl_taxes=None,
                 lines=0, status="To be evaluated", source=[], warnings=[]))
             row["total"] += total
-            row["evaluated_total"] += total
+            row["evaluated_total"] += evaluated_total(e["kind"], e["items"])
             if e["kind"] == "foreign":
                 commission = sum(num(item.get("commission")) or 0 for item in e["items"])
                 row["commission_total"] += commission
