@@ -600,6 +600,29 @@ def finish(ws, freeze, landscape=True):
     ws.page_setup.fitToWidth = 1
     ws.page_setup.fitToHeight = 0
     ws.sheet_properties.pageSetUpPr = openpyxl.worksheet.properties.PageSetupProperties(fitToPage=True)
+    center_title_rows(ws)
+    center_sheet(ws)
+
+def center_title_rows(ws):
+    """Center standalone title/subtitle rows across the populated worksheet width."""
+    last_column = ws.max_column
+    for row_number in (1, 2):
+        populated = [cell for cell in ws[row_number] if cell.value is not None]
+        if len(populated) != 1 or populated[0].column != 1 or last_column <= 1:
+            continue
+        cell = populated[0]
+        ws.merge_cells(start_row=row_number, start_column=1,
+                       end_row=row_number, end_column=last_column)
+        cell.alignment = CENTER
+        ws.row_dimensions[row_number].height = max(ws.row_dimensions[row_number].height or 15, 24)
+
+def center_sheet(ws, preserve_right=False):
+    """Center and wrap populated cells for readable generated workbooks."""
+    for row in ws.iter_rows():
+        for cell in row:
+            if cell.value is not None:
+                horizontal = "right" if preserve_right and cell.alignment.horizontal == "right" else "center"
+                cell.alignment = Alignment(horizontal=horizontal, vertical="center", wrap_text=True)
 
 def safe_sheet(name, used):
     name = re.sub(r"[\[\]\*\?/\\:]", "-", name)[:31]
@@ -643,78 +666,77 @@ def align_clauses(bidders):
     return master
 
 # ----------------------------------------------------------------- GCC workbook
-def build_gcc(groups, out, document_type="GCC"):
+def build_gcc(groups, out, document_type="GCC", tender_no=""):
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
     used = set()
     summary = []
-    for gkey, bidders in groups.items():
-        cat, code = gkey[0], gkey[1]
-        label = CATS.get(cat)
-        if label is None and document_type == "GCT":
-            label = ", ".join(b["name"] for b in bidders)
-        label = label or "Unrecognised template"
-        # ordered union of clauses
-        clauses = align_clauses(bidders)
-        ws = wb.create_sheet(safe_sheet(f"{document_type} - {label}", used))
-        n = len(bidders)
-        last_col = 2 + 2 * n + 1
-        ws.cell(1, 1, f"{document_type} COMPLIANCE COMPARISON — {label}" + (f"  (Form LGLS/FCC/{code})" if code else "")).font = Font(bold=True, size=14, color=NAVY)
-        ws.cell(2, 1, f"{n} bidder(s) • {len(clauses)} clauses • generated {datetime.now():%Y-%m-%d %H:%M}").font = Font(italic=True, color="595959")
-        if document_type == "GCT":
-            ws.cell(3, 1, "Document summary: GCT compliance document analyzed").font = Font(italic=True, color="595959")
-        hdr = 4
-        for c, t in ((1, "Clause No"), (2, "Description")):
-            hcell(ws, hdr, c, t)
-            ws.merge_cells(start_row=hdr, start_column=c, end_row=hdr + 1, end_column=c)
-            ws.cell(hdr + 1, c).border = BORDER
+    bidders = [b for group in groups.values() for b in group]
+    if not bidders:
+        wb.save(out)
+        return
+    labels = [CATS.get(gkey[0]) or "Unrecognised template" for gkey in groups]
+    label = labels[0] if len(set(labels)) == 1 else "ALL BIDDERS"
+    clauses = align_clauses(bidders)
+    ws = wb.create_sheet(safe_sheet(f"{document_type} - All Bidders", used))
+    n = len(bidders)
+    title = f"{document_type} COMPLIANCE COMPARISON — {label}"
+    if tender_no:
+        title += f"  |  Tender No: {tender_no}"
+    ws.cell(1, 1, title).font = Font(bold=True, size=14, color=NAVY)
+    ws.cell(2, 1, f"{n} bidder(s) • {len(clauses)} clauses • generated {datetime.now():%Y-%m-%d %H:%M}").font = Font(italic=True, color="595959")
+    if document_type == "GCT":
+        ws.cell(3, 1, "Document summary: GCT compliance document analyzed").font = Font(italic=True, color="595959")
+    hdr = 4
+    for c, t in ((1, "Clause No"), (2, "Description")):
+        hcell(ws, hdr, c, t)
+        ws.merge_cells(start_row=hdr, start_column=c, end_row=hdr + 1, end_column=c)
+        ws.cell(hdr + 1, c).border = BORDER
+    for i, b in enumerate(bidders):
+        c0 = 3 + 2 * i
+        fill = BIDFILLS[i % len(BIDFILLS)]
+        hcell(ws, hdr, c0, b["name"], fill)
+        hcell(ws, hdr, c0 + 1, None, fill)
+        ws.merge_cells(start_row=hdr, start_column=c0, end_row=hdr, end_column=c0 + 1)
+        hcell(ws, hdr + 1, c0, "Complied / Not Complied", SUBFILL, "000000")
+        hcell(ws, hdr + 1, c0 + 1, "Explanatory Note", SUBFILL, "000000")
+    r = hdr + 2
+    first = r
+    for m in clauses:
+        body(ws, r, 1, m["clause"], center=True)
+        body(ws, r, 2, m["desc"])
         for i, b in enumerate(bidders):
-            c0 = 3 + 2 * i
-            fill = BIDFILLS[i % len(BIDFILLS)]
-            hcell(ws, hdr, c0, b["name"], fill)
-            hcell(ws, hdr, c0 + 1, None, fill)
-            ws.merge_cells(start_row=hdr, start_column=c0, end_row=hdr, end_column=c0 + 1)
-            hcell(ws, hdr + 1, c0, "Complied / Not Complied", SUBFILL, "000000")
-            hcell(ws, hdr + 1, c0 + 1, "Explanatory Note", SUBFILL, "000000")
-        r = hdr + 2
-        first = r
-        for m in clauses:
-            body(ws, r, 1, m["clause"], center=True)
-            body(ws, r, 2, m["desc"])
-            for i, b in enumerate(bidders):
-                row = m["rows"].get(i)
-                st = row["status"] if row else "Not Filled"
-                if row and st == "Unclear":
-                    st = "Unclear"
-                body(ws, r, 3 + 2 * i, st, center=True)
-                note = point_note(row["note"] if row else "Clause not present in this bidder's sheet")
-                if row and row["raw"] and row["raw"].strip().lower() != st.lower():
-                    note = "\n".join(x for x in (point_note(row["raw"]), note) if x)
-                body(ws, r, 4 + 2 * i, note)
-                set_note_row_height(ws, r, m["desc"], st, note)
-            r += 1
-        lastr = r - 1
-        for i in range(n):
-            col = L(3 + 2 * i)
-            add_status_cf(ws, f"{col}{first}:{col}{lastr}", f"{col}{first}")
-        ws.column_dimensions["A"].width = 10
-        ws.column_dimensions["B"].width = 48
-        for i in range(n):
-            ws.column_dimensions[L(3 + 2 * i)].width = 15
-            ws.column_dimensions[L(4 + 2 * i)].width = 52
-        ws.row_dimensions[hdr].height = 24
-        ws.row_dimensions[hdr + 1].height = 32
-        finish(ws, f"C{hdr+2}")
-        for i, b in enumerate(bidders):
-            rows = b["data"]["rows"]
-            cnt = defaultdict(int)
-            for x in rows:
-                cnt[x["status"]] += 1
-            summary.append((label, b["name"], Path(b["path"]).name, len(clauses), cnt))
+            row = m["rows"].get(i)
+            st = row["status"] if row else "Not Filled"
+            body(ws, r, 3 + 2 * i, st, center=True)
+            note = point_note(row["note"] if row else "Clause not present in this bidder's sheet")
+            if row and row["raw"] and row["raw"].strip().lower() != st.lower():
+                note = "\n".join(x for x in (point_note(row["raw"]), note) if x)
+            body(ws, r, 4 + 2 * i, note)
+            set_note_row_height(ws, r, m["desc"], st, note)
+        r += 1
+    lastr = r - 1
+    for i in range(n):
+        col = L(3 + 2 * i)
+        add_status_cf(ws, f"{col}{first}:{col}{lastr}", f"{col}{first}")
+    ws.column_dimensions["A"].width = 10
+    ws.column_dimensions["B"].width = 48
+    for i in range(n):
+        ws.column_dimensions[L(3 + 2 * i)].width = 15
+        ws.column_dimensions[L(4 + 2 * i)].width = 52
+    ws.row_dimensions[hdr].height = 24
+    ws.row_dimensions[hdr + 1].height = 32
+    finish(ws, f"C{hdr+2}")
+    for b in bidders:
+        rows = b["data"]["rows"]
+        cnt = defaultdict(int)
+        for x in rows:
+            cnt[x["status"]] += 1
+        summary.append((label, b["name"], Path(b["path"]).name, len(clauses), cnt))
     wb.save(out)
 
 # ----------------------------------------------------------------- SCC workbook
-def build_scc(groups, out, tmpl):
+def build_scc(groups, out, tmpl, tender_no=""):
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
     used = set()
@@ -731,7 +753,10 @@ def build_scc(groups, out, tmpl):
                 if k not in keys:
                     keys[k] = row["req"]
         ws = wb.create_sheet(safe_sheet(f"SCC - {label}", used))
-        ws.cell(1, 1, f"SCC COMPLIANCE COMPARISON — {label}").font = Font(bold=True, size=14, color=NAVY)
+        title = f"SCC COMPLIANCE COMPARISON — {label}"
+        if tender_no:
+            title += f"  |  Tender No: {tender_no}"
+        ws.cell(1, 1, title).font = Font(bold=True, size=14, color=NAVY)
         ws.cell(2, 1, f"{n} bidder(s) • {len(keys)} condition(s) • generated {datetime.now():%Y-%m-%d %H:%M}").font = Font(italic=True, color="595959")
         hdr = 4
         for c, t in ((1, "Clause No"), (2, "Description")):
@@ -770,6 +795,9 @@ def build_scc(groups, out, tmpl):
         # ---------- Table 2: amendments / new additions proposed by each bidder
         r += 2
         ws.cell(r, 1, "TABLE 2 — AMENDMENTS / NEW ADDITIONS TO THE GENERAL CONDITIONS").font = Font(bold=True, size=12, color=NAVY)
+        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=2 + 2 * n)
+        ws.cell(r, 1).alignment = CENTER
+        ws.row_dimensions[r].height = 54
         r += 1
         for c, t in ((1, "Ref"), (2, "Clause Number under the General Conditions of Contract")):
             hcell(ws, r, c, t)
@@ -962,15 +990,15 @@ def run(inputs, out, mode=None):
             lst.sort(key=lambda b: b["name"].lower())
     if gcc_groups:
         res["gcc"] = out / f"GCC_Compliance_Comparison{_tender_suffix(res['tenders'])}.xlsx"
-        build_gcc(gcc_groups, res["gcc"])
+        build_gcc(gcc_groups, res["gcc"], tender_no=", ".join(res["tenders"]))
         res["gcc_bidders"] = [b["name"] for v in gcc_groups.values() for b in v]
     if gct_groups:
         res["gct"] = out / f"GCT_Compliance_Comparison{_tender_suffix(res['tenders'])}.xlsx"
-        build_gcc(gct_groups, res["gct"], document_type="GCT")
+        build_gcc(gct_groups, res["gct"], document_type="GCT", tender_no=", ".join(res["tenders"]))
         res["gct_bidders"] = [b["name"] for v in gct_groups.values() for b in v]
     if scc_groups:
         res["scc"] = out / f"SCC_Compliance_Comparison{_tender_suffix(res['tenders'])}.xlsx"
-        build_scc(scc_groups, res["scc"], template_scc_text())
+        build_scc(scc_groups, res["scc"], template_scc_text(), tender_no=", ".join(res["tenders"]))
         res["scc_bidders"] = [b["name"] for v in scc_groups.values() for b in v]
     if evals:
         from Technical import evalreport
