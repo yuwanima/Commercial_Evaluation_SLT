@@ -1,41 +1,69 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ComOps</title>
-<link rel="stylesheet" href="main.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#07305B">
+  <title>SLT-MOBITEL | Commercial Operations</title>
+  <link rel="stylesheet" href="main.css">
 </head>
 <body>
-<header>
-  <div class="wrap header-wrap">
-    <div>
-      <div class="eyebrow">SLT ComOps</div>
-      <h1>Commercial Operations</h1>
-      <p>Document intelligence for faster, clearer tender evaluation.</p>
+  <header class="site-header">
+    <div class="wrap header-wrap">
+      <a class="brand-lockup" href="/" aria-label="SLT-MOBITEL Commercial Operations home">
+        <img class="slt-logo" src="/main-images/logo.png" alt="SLT-MOBITEL">
+      </a>
+      <nav class="main-nav" aria-label="Main navigation">
+        <a class="nav-link" href="/" aria-current="page">Home</a>
+        <a class="nav-link" href="/commercial-evaluation">Evaluation</a>
+        <a class="robot-display header-robot" href="/chatbot" aria-label="Open ComOps chatbot" title="Open ComOps chatbot">
+          <img class="robot-art" src="/chatbot.jpg" alt="SLT ComOps robot">
+        </a>
+      </nav>
     </div>
-    <a class="robot-display header-robot" href="/chatbot" aria-label="Open ComOps chatbot" title="Open ComOps chatbot"><img class="robot-art" src="/chatbot.jpg" alt="SLT ComOps robot"></a>
-  </div>
-</header>
-<main>
-  <div class="wrap">
-    <section class="hero-card">
-      <div class="hero-copy">
-        <span class="pill">Evaluation workspace</span>
-        <h2>Bring your tender documents together</h2>
-        <p>Upload and compare technical evaluation reports, GCC, SCC, GCT, and price documents from one focused workspace.</p>
-        <a class="primary-button" href="/commercial-evaluation">Open Commercial Evaluation <span aria-hidden="true">→</span></a>
-      </div>
-      <div class="hero-visual" aria-hidden="true">
-        <div class="visual-window"><span></span><span></span><span></span><b>Commercial<br>Evaluation</b><i></i><i></i><i></i></div>
-      </div>
-    </section>
-    <section class="feature-grid" aria-label="Available capabilities">
-      <article><div class="feature-icon">01</div><h3>Technical review</h3><p>Extract and review technical evaluation reports and compliance findings.</p></article>
-      <article><div class="feature-icon">02</div><h3>Price comparison</h3><p>Organise bidder price schedules and compare evaluated prices by currency.</p></article>
-      <article><div class="feature-icon">03</div><h3>Clear outputs</h3><p>Download structured Excel reports for review and decision-making.</p></article>
-    </section>
-  </div>
-</main>
+  </header>
+
+  <main>
+    <div class="wrap page-content">
+      <section class="hero-card" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <span class="eyebrow"><span class="eyebrow-dot"></span> Smarter procurement. Greater transparency.</span>
+          <h1 id="hero-title"><span class="title-commercial">Commercial</span><span class="title-evaluation">Evaluation</span></h1>
+          <p class="hero-support">Intelligent document processing and evaluation for smarter procurement decisions.</p>
+          <p class="hero-description">Upload tender documents, analyse technical and commercial information, review compliance and get intelligent support from ComOps.</p>
+          <div class="hero-actions">
+            <a class="primary-button" href="/commercial-evaluation" aria-label="Get started and open Commercial Evaluation">Get Started</a>
+          </div>
+        </div>
+        <div class="hero-visual" aria-label="SLT-MOBITEL office building">
+          <img class="building-image" src="/main-images/background.png" alt="SLT-MOBITEL building beneath a blue sky">
+          <span class="image-curve image-curve-cyan" aria-hidden="true"></span>
+          <span class="image-curve image-curve-green" aria-hidden="true"></span>
+        </div>
+      </section>
+
+      <section class="capabilities" aria-labelledby="capabilities-title">
+        <div class="section-heading">
+          <div><h2 id="capabilities-title">Everything you need to evaluate</h2></div>
+        </div>
+        <div class="feature-grid">
+          <a class="feature-card feature-technical" href="/commercial-evaluation" aria-label="Upload tender documents">
+            <div class="feature-heading"><span class="feature-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 3.75h7l4 4v12.5H7zM14 3.75v4h4M10 12h5M10 15.5h5"/></svg></span><span class="feature-index">01 / UPLOAD</span></div>
+            <h3>Upload Documents</h3><p>Upload tender documents for processing and evaluation.</p>
+          </a>
+          <a class="feature-card feature-pricing" href="/commercial-evaluation" aria-label="Open the evaluation workspace to view results">
+            <div class="feature-heading"><span class="feature-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 19.5h16M6 16V9m6 7V4.5m6 11.5v-5"/><path d="M4.5 7.5 10 5l5 2 4.5-3"/></svg></span><span class="feature-index">02 / RESULTS</span></div>
+            <h3>View Evaluation</h3><p>Review evaluation results, scores and reports.</p>
+          </a>
+          <a class="feature-card feature-comops" href="/chatbot" aria-label="Ask ComOps about procurement contracts and requirements">
+            <div class="feature-heading"><span class="feature-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="12" rx="4"/><path d="M9 12h.01M15 12h.01M9 16h6M12 4v3M3 12h1M20 12h1"/></svg></span><span class="feature-index">03 / ASSIST</span></div>
+            <h3>Ask ComOps</h3><p>Get intelligent answers about procurement contracts and requirements.</p>
+          </a>
+        </div>
+      </section>
+
+      <footer class="page-footer"><span>SLT-MOBITEL · Commercial Operations</span><span>Structured evidence. Clearer evaluation.</span></footer>
+    </div>
+  </main>
 </body>
 </html>

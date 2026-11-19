@@ -7,6 +7,7 @@ BASE = Path(__file__).resolve().parent
 BACKEND_DIR = BASE.parent
 FRONTEND_DIR = BACKEND_DIR.parent / "Frontend" / "tender_intake"
 MAIN_FRONTEND_DIR = BACKEND_DIR.parent / "Frontend" / "Main"
+MAIN_IMAGES_DIR = MAIN_FRONTEND_DIR / "images"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
@@ -99,6 +100,19 @@ def index():
 @app.get("/main.css")
 def main_stylesheet():
     return send_from_directory(MAIN_FRONTEND_DIR, "main.css")
+
+@app.get("/main-images/<path:filename>")
+def main_image(filename):
+    if filename not in {"logo.png", "background.png"}:
+        abort(404)
+    if filename == "background.png":
+        image_path = MAIN_IMAGES_DIR / filename
+        if not image_path.is_file():
+            image_path = MAIN_IMAGES_DIR / "background"
+        if not image_path.is_file():
+            abort(404)
+        return send_file(image_path, mimetype="image/png")
+    return send_from_directory(MAIN_IMAGES_DIR, filename)
 
 @app.get("/commercial-evaluation")
 def commercial_evaluation():

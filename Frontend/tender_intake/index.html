@@ -7,15 +7,41 @@
 <link rel="stylesheet" href="index.css">
 </head>
 <body>
-<header><div class="wrap"><h1>Commericial Evaluation</h1><a id="comops-launcher" class="robot-display header-robot" href="/chatbot" aria-label="Open ComOps chatbot" aria-haspopup="dialog" aria-controls="comops-panel" aria-expanded="false" title="Open ComOps chatbot"><img class="robot-art" src="/chatbot.jpg" alt="SLT ComOps robot"></a></div></header>
-<main><div class="wrap">
-  <nav class="tabs" role="tablist"><button type="button" class="on" data-tab="all" role="tab">Technical Evaluation Reports / GCC & SCC Compliance Reports / Price Documents</button></nav>
+<header class="evaluation-site-header">
+  <div class="evaluation-header-inner">
+    <a class="evaluation-brand" href="/" aria-label="SLT-MOBITEL home"><img class="evaluation-brand-logo" src="/main-images/logo.png" alt="SLT-MOBITEL"></a>
+    <nav class="evaluation-header-nav" aria-label="Main navigation">
+      <a class="evaluation-nav-link" href="/">Home</a>
+      <a class="evaluation-nav-link active" href="/commercial-evaluation" aria-current="page">Evaluation</a>
+      <a id="comops-launcher" class="evaluation-robot-link" href="/chatbot" aria-label="Open ComOps procurement chatbot" aria-haspopup="dialog" aria-controls="comops-panel" aria-expanded="false" title="Open ComOps chatbot"><img class="evaluation-robot-image" src="/chatbot.jpg" alt="ComOps robot"></a>
+    </nav>
+  </div>
+</header>
+<main class="workspace-layout">
+  <div class="wrap workspace-main">
+  <section class="workspace-intro" aria-labelledby="upload-page-title"><h1 id="upload-page-title">Upload Tender Documents</h1><p class="workspace-lead">Upload GCC, SCC, technical evaluation reports, and price documents together.</p></section>
+  <nav class="tabs" role="tablist"><button type="button" class="on" data-tab="all" role="tab">Evaluation workspace <span aria-hidden="true">↗</span></button></nav>
   <div class="panel" id="p-all">
-    <section><h2>Upload all tender documents</h2><p class="sub">Upload GCC, SCC, technical evaluation reports, and price documents together. The system will identify and process each document.</p>
-      <div class="zone"><b>Drop documents or folders here</b><span>.xlsx · .xls · .docx · .doc · .pdf · .zip</span></div>
-      <div class="pick"><label>Choose files<input class="f-files" type="file" multiple accept=".xlsx,.xlsm,.xls,.docx,.doc,.pdf,.zip"></label><label>Choose folder<input class="f-dir" type="file" webkitdirectory multiple></label></div>
-      <ul class="files"></ul><div class="count"></div></section>
-    <div class="actions"><button class="btn go" type="button">Process all documents</button></div><div class="out"></div>
+    <section class="upload-card">
+      <div class="zone"><span class="dropzone-icon" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M9.5 24h13a5.2 5.2 0 0 0 .4-10.4A7 7 0 0 0 9.4 12a6 6 0 0 0 .1 12Z"/><path d="M16 23V15m0 0-3 3m3-3 3 3"/></svg></span><b>Drag &amp; drop your files here</b><span>or</span><div class="pick upload-choices"><label class="browse-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5h6l2 2H21v10H3z"/><path d="M3 9h18"/></svg>Browse Files<input class="f-files" type="file" multiple accept=".xlsx,.xlsm,.xls,.docx,.doc,.pdf,.zip"></label><label class="browse-button folder-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5h6l2 2H21v10H3z"/><path d="M3 9h18"/></svg>Choose folder<input class="f-dir" type="file" webkitdirectory multiple></label></div></div>
+      <div class="format-guide" id="supported-formats" aria-label="Supported file formats"><span>XLSX</span><span>XLS</span><span>XLSM</span><span>DOCX</span><span>DOC</span><span>PDF</span><span>ZIP</span></div>
+      <ul class="files"></ul><div class="count" aria-live="polite"></div></section>
+    <div class="actions"><button class="btn go" type="button">Upload &amp; Continue</button></div>
+    <section id="evaluation-progress" class="evaluation-progress hidden" aria-live="polite" aria-busy="false">
+      <aside class="progress-stepper"><p class="progress-kicker">YOUR WORKFLOW</p><h3>Evaluation Progress</h3><ol>
+        <li data-progress-step="upload"><span class="step-number">1</span><div><b>Upload Documents</b><small data-step-status>Waiting for files</small></div></li>
+        <li data-progress-step="analyse"><span class="step-number">2</span><div><b>Analyse Documents</b><small data-step-status>Waiting for submission</small></div></li>
+        <li data-progress-step="results"><span class="step-number">3</span><div><b>View Results</b><small data-step-status>Not available yet</small></div></li>
+      </ol></aside>
+      <div class="progress-main"><div class="progress-robot"><img src="/chatbot.jpg" alt="ComOps assistant" /></div><div class="progress-content">
+        <p id="evaluation-progress-label" class="progress-label">DOCUMENT PROCESSING</p>
+        <h3 id="evaluation-progress-title">Analyzing Your Documents…</h3>
+        <p id="evaluation-progress-message">The evaluation service is processing your submission.</p>
+        <div id="evaluation-progress-track" class="evaluation-progress-track" role="progressbar" aria-label="Document processing progress" aria-valuetext="Waiting for processing response"><span></span></div>
+        <div class="progress-files"><b id="evaluation-progress-files-heading">Files in this request</b><div id="evaluation-progress-files" class="progress-file-list"></div></div>
+      </div></div>
+    </section>
+    <div class="out" id="results" aria-live="polite"></div>
   </div>
 </div></main>
 <aside id="comops-panel" class="comops-panel" role="dialog" aria-labelledby="comops-panel-title" aria-hidden="true">

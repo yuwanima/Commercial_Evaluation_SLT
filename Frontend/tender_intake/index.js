@@ -14,9 +14,49 @@ function folderName(parts){
 
 function panel(root,mode){
   const items=[],zone=root.querySelector('.zone'),ul=root.querySelector('ul.files'),cnt=root.querySelector('.count'),out=root.querySelector('.out'),go=root.querySelector('.go'),goText=go.textContent;
+  const progress=root.querySelector('#evaluation-progress');
+  const progressTitle=root.querySelector('#evaluation-progress-title');
+  const progressMessage=root.querySelector('#evaluation-progress-message');
+  const progressFiles=root.querySelector('#evaluation-progress-files');
+  const progressTrack=root.querySelector('#evaluation-progress-track');
+  const progressSteps=progress?[...progress.querySelectorAll('[data-progress-step]')]:[];
+  function setProgress(state, message){
+    if(!progress)return;
+    progress.classList.remove('hidden');
+    progress.dataset.state=state;
+    progress.setAttribute('aria-busy',state==='processing'?'true':'false');
+    progressTitle.textContent=state==='processing'?'Submitting and analysing your documents…':state==='complete'?'Evaluation response received':'We could not complete the analysis';
+    const submittedTypes=[...new Set(items.map(it=>(it.file.name.match(/\.([^.]+)$/)||[])[1]?.toUpperCase()).filter(Boolean))];
+    progressMessage.textContent=state==='processing'&&submittedTypes.length
+      ?`${message} File types in this request: ${submittedTypes.join(', ')}.`
+      :message;
+    progressTrack.setAttribute('aria-valuetext',state==='processing'?'Waiting for the evaluation service response':state==='complete'?'Processing response received':'Processing request failed');
+    progressFiles.replaceChildren();
+    items.forEach(it=>{
+      const chip=document.createElement('span');
+      chip.className='progress-file';
+      chip.textContent=it.path||it.file.name;
+      chip.title=chip.textContent;
+      progressFiles.append(chip);
+    });
+    progressSteps.forEach((step,index)=>{
+      const status=step.querySelector('[data-step-status]');
+      step.classList.toggle('is-active',state==='processing'&&index===0);
+      step.classList.toggle('is-complete',state==='complete'&&index<2);
+      step.classList.toggle('is-error',state==='error'&&index===1);
+      if(status)status.textContent=state==='processing'
+        ?(index===0?'Submitting selected files':index===1?'Waiting for processing response':'Not available yet')
+        :state==='complete'
+          ?(index<2?'Completed': 'Results available below')
+          :(index===0?'Submission attempted':index===1?'Result could not be confirmed':'Not available');
+    });
+    if(state==='complete')progressSteps[2]?.classList.add('is-complete');
+    if(state==='error')progressSteps[1]?.classList.add('is-error');
+  }
   const kindOf=n=>/\.zip$/i.test(n)?'ZIP':/gct/i.test(n)?'GCT':mode==='all'?'DOC':mode==='eval'?'EVAL':mode==='price'?'PRICE':/\.(xlsx|xlsm|xls)$/i.test(n)?'GCC':/\.pdf$/i.test(n)?(/scc/i.test(n)?'SCC':/gcc/i.test(n)?'GCC':'PDF'):'SCC';
   const named=it=>it.kind!=='ZIP'&&it.kind!=='EVAL';
   function render(extra){
+    if(progress){progress.classList.add('hidden');progress.removeAttribute('data-state');progress.setAttribute('aria-busy','false')}
     ul.innerHTML='';
     if(mode==='all'&&items.length){
       const groups={Technical:[],Price:[], 'GCC/SCC':[],GCT:[],Other:[]};
@@ -65,7 +105,7 @@ function panel(root,mode){
   }
   root.querySelector('.f-files').onchange=e=>{add([...e.target.files].map(f=>({file:f,parts:null})));e.target.value=''};
   root.querySelector('.f-dir').onchange=e=>{add([...e.target.files].map(f=>({file:f,parts:(f.webkitRelativePath||f.name).split('/')})));e.target.value=''};
-  zone.onclick=()=>root.querySelector('.f-files').click();
+  zone.onclick=e=>{if(!e.target.closest('.browse-button'))root.querySelector('.f-files').click()};
   ['dragenter','dragover'].forEach(ev=>zone.addEventListener(ev,e=>{e.preventDefault();zone.classList.add('over')}));
   ['dragleave','drop'].forEach(ev=>zone.addEventListener(ev,e=>{e.preventDefault();zone.classList.remove('over')}));
   const readEntry=(en,path)=>new Promise(res=>{
@@ -84,6 +124,7 @@ function panel(root,mode){
     const fd=new FormData();fd.append('mode',mode);
     items.forEach(it=>{fd.append('files',it.file);fd.append('names',named(it)||mode==='eval'?it.name.trim():'')});
     go.disabled=true;go.innerHTML='<span class="spin"></span>Processing…';out.innerHTML='';
+    setProgress('processing','Submitting the selected files to the evaluation service. The service response will confirm when processing is complete.');
     try{
       const r=await fetch('/api/process',{method:'POST',body:fd});
       const contentType=r.headers.get('content-type')||'';
@@ -98,7 +139,18 @@ function panel(root,mode){
           (text.includes('no filled-in price schedule found')&&(j.gcc||j.gct||j.scc||!j.price)));
       }):(j.problems||[]));
       const probs=visibleProblems.length?'<b style="color:var(--bad);font-size:14px">Some files could not be read:</b><ul class="warn">'+visibleProblems.map(p=>'<li>'+esc(p)+'</li>').join('')+'</ul>':'';
-      if(!r.ok){out.innerHTML=`<div class="msg">${esc(j.error||'Something went wrong')}${j.problems?'<ul class="warn">'+j.problems.map(p=>'<li>'+esc(p)+'</li>').join('')+'</ul>':''}</div>`;return}
+      if(!r.ok){
+        setProgress('error',j.error||'The evaluation service returned an error. Review the message below and try again.');
+        out.innerHTML=`<div class="msg">${esc(j.error||'Something went wrong')}${j.problems?'<ul class="warn">'+j.problems.map(p=>'<li>'+esc(p)+'</li>').join('')+'</ul>':''}</div>`;return
+      }
+      const completedTypes=[];
+      if(j.eval)completedTypes.push('technical evaluation reports');
+      if(j.gcc||j.gct||j.scc)completedTypes.push('GCC/GCT/SCC compliance documents');
+      if(j.price)completedTypes.push('price documents');
+      const completionMessage=completedTypes.length
+        ?`The service returned results for ${completedTypes.join(', ')}. Review the results and any extraction notes below.`
+        :'The service returned a response. Review the results and any extraction notes below.';
+      setProgress('complete',completionMessage);
       if(mode==='all'){out.innerHTML=allBox(j,probs);return}
       if(mode==='eval'){out.innerHTML=(j.evals||[]).map(evBox(j)).join('')+(probs?`<div class="res">${probs}</div>`:'');return}
       if(mode==='price'){out.innerHTML=priceBox(j,probs);return}
@@ -106,7 +158,7 @@ function panel(root,mode){
       const summaries=(j.document_summaries||[]).map(s=>`<div class="doc-summary"><h4>${esc(s.bidder||'Unknown bidder')} — ${esc(s.type||'Document')} summary</h4><ul>${s.points.filter(p=>!/^signature section:/i.test(p)&&!/^bidder name(?: source)?:/i.test(p)).map(p=>`<li>${esc(p)}</li>`).join('')}</ul></div>`).join('');
       out.innerHTML=`<div class="res"><h3>✓ Comparison ready</h3><div style="color:var(--mut);font-size:14px">Download your Excel files:</div>
         <div class="dl">${dl('gcc','GCC_Compliance_Comparison.xlsx',j.gcc_bidders)}${dl('gct','GCT_Compliance_Comparison.xlsx',j.gct_bidders)}${dl('scc','SCC_Compliance_Comparison.xlsx',j.scc_bidders)}</div>${summaries?`<div class="doc-summaries"><h4>Document checks</h4>${summaries}</div>`:''}${probs}</div>`;
-    }catch(e){out.innerHTML='<div class="msg">Could not reach the server: '+esc(String(e))+'</div>'}
+    }catch(e){setProgress('error','The request did not return a usable processing response. Review the error below before retrying.');out.innerHTML='<div class="msg">Could not reach the server: '+esc(String(e))+'</div>'}
     finally{go.disabled=false;go.textContent=goText}
   };
 }
