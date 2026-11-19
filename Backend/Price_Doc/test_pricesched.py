@@ -150,6 +150,36 @@ class PriceBidderIdentificationTests(unittest.TestCase):
             # An LKR quotation belongs on the LKR side of the column, not under (USD).
             self.assertIsNone(sheet["O9"].value)
             self.assertEqual(sheet["P9"].value, 100)
+            self.assertEqual(sheet.max_row, 9)
+
+    def test_price_output_has_only_one_row_per_described_item(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "anonymous.docx"
+            document = Document()
+            document.add_paragraph("Official Frank: Acme Power (Pvt) Ltd")
+            table = document.add_table(rows=3, cols=8)
+            headers = [
+                "S/No", "Description", "Qty",
+                "Unit Price (Rs.) [Excluding Taxes]", "VAT (%)", "NBT (%)",
+                "Other Taxes (%)", "Unit Price (Rs.) [Including Taxes]",
+            ]
+            values = [
+                ["1", "First item", "2", "100", "0", "0", "0", "100"],
+                ["2", "Second item", "3", "200", "0", "0", "0", "200"],
+            ]
+            for cell, value in zip(table.rows[0].cells, headers):
+                cell.text = value
+            for row, row_values in zip(table.rows[1:], values):
+                for cell, value in zip(row.cells, row_values):
+                    cell.text = value
+            document.save(path)
+
+            result = pricesched.run([str(path)], Path(directory) / "out")
+
+            from openpyxl import load_workbook
+            sheet = load_workbook(result["file"], data_only=False).active
+            self.assertEqual(sheet.max_row, 10)
+            self.assertEqual([sheet.cell(row, 5).value for row in (9, 10)], ["First item", "Second item"])
 
     def test_price_output_has_separate_annexure_tab_per_company(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -245,6 +275,24 @@ class PriceBidderIdentificationTests(unittest.TestCase):
             # T = with SSCL without VAT = 102,000;  U = with SSCL & VAT = 120,000
             self.assertAlmostEqual(sheet["T9"].value, 102000)
             self.assertAlmostEqual(sheet["U9"].value, 120000)
+
+    def test_evaluated_total_uses_required_qty_and_sscl_without_vat(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "local.docx"
+            self.create_price_document(path, "Acme Power (Pvt) Ltd")
+            document = Document(path)
+            cells = document.tables[0].rows[1].cells
+            cells[2].text = "10"
+            cells[3].text = "100"
+            cells[4].text = "18"
+            cells[5].text = "2"
+            cells[7].text = "120"
+            document.save(path)
+
+            result = pricesched.run([str(path)], Path(directory) / "out")
+
+            self.assertEqual(result["rows"][0]["total"], 1200)
+            self.assertEqual(result["rows"][0]["evaluated_total"], 1020)
 
     def test_previous_purchased_group_is_single_and_populated(self):
         with tempfile.TemporaryDirectory() as directory:
