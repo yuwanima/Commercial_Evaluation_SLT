@@ -79,8 +79,9 @@ def num(v):
 
 def _text(v):
     text = C.clean_multiline(v) if v is not None else ""
-    return re.sub(r"\(cid:415\)", "ti", re.sub(r"\(cid:414\)", "tf", text, flags=re.IGNORECASE),
-                  flags=re.IGNORECASE)
+    text = re.sub(r"\(cid:\s*414\)", "tf", text, flags=re.IGNORECASE)
+    text = re.sub(r"\(cid:\s*415\)", "ti", text, flags=re.IGNORECASE)
+    return re.sub(r"\(cid:\s*\d+\)", "", text, flags=re.IGNORECASE)
 
 
 def read_grids(path):
@@ -857,6 +858,7 @@ def build_annexure_workbook(entries, out, template_path=ANNEXURE_TEMPLATE, tende
             purchasing=purchasing,
             closing_date=closing_date,
         )
+        C.center_sheet(ws, preserve_right=True)
 
     wb.calculation.calcMode = "auto"
     wb.calculation.fullCalcOnLoad = True

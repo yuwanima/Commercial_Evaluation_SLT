@@ -590,12 +590,12 @@ def _cf_eligible(ws, rng, first):
         ),
     )
 
-def _build_technical_score_sheet(wb, sheet_name, label, records):
+def _build_technical_score_sheet(wb, sheet_name, label, records, tender_no=""):
     """Add a dedicated, auditable score summary worksheet."""
     ws = wb.create_sheet(sheet_name)
     ws["A1"] = "TECHNICAL EVALUATION SCORES"
     ws["A1"].font = Font(bold=True, size=14, color=C.NAVY)
-    ws["A2"] = f"Source: {label}"
+    ws["A2"] = f"Source: {label}" + (f"  |  Tender No: {tender_no}" if tender_no else "")
     ws["A2"].font = Font(italic=True, color="595959")
     headers = ["Company", "Technical score /100", "Marks earned", "Maximum marks",
                "Score source", "Criteria scored", "Comply", "Partial Comply",
@@ -652,6 +652,7 @@ def build_eval_workbook(evals, out):
             C.safe_sheet((f"R{idx} " if multi else "") + "Technical Scores", used),
             label,
             eligibility_records,
+            tender_no=meta.get("Tender No.", ""),
         )
         eligibility_by_name = {_bidder_match_key(item["bidder"]): item
                                for item in eligibility_records}
@@ -737,52 +738,6 @@ def build_eval_workbook(evals, out):
                 if flag:
                     x.font = Font(italic=True, size=9, color="B42318")
             r += 3
-        # ---- editable recommendation table
-        C.body(ws, r, 1, "Recommendations for Commercial Evaluation", bold=True)
-        ws.cell(r, 1).font = Font(bold=True, size=13, color=C.NAVY)
-        r += 1
-        C.hcell(ws, r, 1, "FIELD")
-        for j, bidder in enumerate(all_bidders, 2):
-            C.hcell(ws, r, j, bidder)
-        r += 1
-        not_eligible = {
-            bidder for bidder in all_bidders
-            if not any(item["eligibility_status"] == "eligible"
-                       and _bidder_match_key(item["bidder"]) == _bidder_match_key(bidder)
-                       for item in eligibility_records)
-        }
-        recommendation_table = _recommendation_table(all_bidders, not_eligible, ev["bids"])
-        recommendation_rows = [
-            ("Recommended for Financial Bid Opening (Yes/No)",
-             [item["financial_bid_opening"] for item in recommendation_table]),
-            ("Evaluated BOM included? (Yes/No)",
-             [item["evaluated_bom_included"] for item in recommendation_table]),
-            ("Missing price items needing separate sealed envelope? (Yes/No — list items)",
-             [item["missing_price_items"] for item in recommendation_table]),
-            ("Previous purchase price (with period & quantity)",
-             [item["previous_purchase_price"] for item in recommendation_table]),
-            ("Reference price of similar items (market/previous)",
-             [item["reference_price"] for item in recommendation_table]),
-            ("More Suitable",
-             [item["more_suitable"] for item in recommendation_table]),
-        ]
-        recommendation_first = r
-        recommendation_validation = DataValidation(
-            type="list", formula1='"Yes,No"', allow_blank=True, showErrorMessage=False)
-        ws.add_data_validation(recommendation_validation)
-        for field, values in recommendation_rows:
-            C.body(ws, r, 1, field, bold=True)
-            for j, value in enumerate(values, 2):
-                C.body(ws, r, j, value, center=True)
-            r += 1
-        recommendation_validation.add(
-            f"B{recommendation_first}:{L(1 + len(all_bidders))}{recommendation_first}")
-        _cf_eligible(
-            ws,
-            f"B{recommendation_first}:{L(1 + len(all_bidders))}{recommendation_first}",
-            f"B{recommendation_first}",
-        )
-        r += 2
         ws.column_dimensions["A"].width = 36
         ws.column_dimensions["A"].width = 58
         ncols = max(max(len(m["headers"]) for m in ev["matrices"]), len(all_bidders) + 1)
@@ -790,6 +745,13 @@ def build_eval_workbook(evals, out):
             ws.column_dimensions[L(j)].width = 22
         C.finish(ws, f"B{first_header_row+1}")
         ws.cell(r, 1, f"Generated {datetime.now():%Y-%m-%d %H:%M} from {label}. Cells are editable (drop-down lists); counts and review checks update automatically.").font = Font(italic=True, size=9, color="7F7F7F")
+
+        not_eligible = {
+            bidder for bidder in all_bidders
+            if not any(item["eligibility_status"] == "eligible"
+                       and _bidder_match_key(item["bidder"]) == _bidder_match_key(bidder)
+                       for item in eligibility_records)
+        }
 
         # ---- non-compliances (report instruction 4b): a record of why each bidder was excluded.
         # Non-compliant bidders do NOT go forward to commercial evaluation, so this sheet

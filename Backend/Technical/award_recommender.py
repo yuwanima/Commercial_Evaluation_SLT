@@ -700,6 +700,10 @@ def build_award_workbook(assessment, output_path, tender=""):
         ws.column_dimensions[get_column_letter(col)].width = width
     ws.freeze_panes = "A8"
     ws.auto_filter.ref = f"A{header_row}:J{header_row + len(assessment.get('bidders', []))}"
+    for row in ws.iter_rows():
+        for cell in row:
+            if cell.value is not None:
+                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     wb.save(output_path)
     return output_path

@@ -25,8 +25,20 @@ def _soffice(src, fmt, outdir):
     return out
 
 
+_CID_REPLACEMENTS = (
+    (re.compile(r"\(cid:\s*414\)", re.IGNORECASE), "tf"),
+    (re.compile(r"\(cid:\s*415\)", re.IGNORECASE), "ti"),
+)
+_UNKNOWN_CID = re.compile(r"\(cid:\s*\d+\)", re.IGNORECASE)
+
+
 def _clean(s):
-    return re.sub(r"\s+", " ", (s or "").replace("\x00", "")).strip()
+    text = str(s or "").replace("\x00", "")
+    for pattern, replacement in _CID_REPLACEMENTS:
+        text = pattern.sub(replacement, text)
+    # Do not allow unresolved PDF font markers into generated DOCX/XLSX files.
+    text = _UNKNOWN_CID.sub("", text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def _is_price_schedule_header(row):
@@ -89,7 +101,7 @@ def _pdf_to_xlsx(lines, tables, out):
                     and any(_clean(ws.cell(i, 1).value).lower().startswith("clause") for i in range(1, r)):
                 continue                                      # header repeated on later pages
             for c, v in enumerate(row[:4], 1):
-                ws.cell(r, c, v)
+                ws.cell(r, c, _clean(v))
             r += 1
     # signature block / trailing text so the reader stops cleanly
     wb.save(out)
@@ -149,7 +161,7 @@ def _pdf_to_docx(lines, tables, out):
     k = next((i for i, l in enumerate(lines) if re.search(r"(?i)evaluation report|conditions of contract", l)), 0)
     lines = lines[k:k + 1] + lines[:k] + lines[k + 1:]
     for l in lines:
-        d.add_paragraph(l)
+        d.add_paragraph(_clean(l))
     merged = []                            # a table split over a page break arrives as separate tables: rejoin
     for rows in tables:
         prev = merged[-1] if merged else None
@@ -172,7 +184,7 @@ def _pdf_to_docx(lines, tables, out):
         for r in rows:
             cells = t.add_row().cells
             for i, v in enumerate(r):
-                cells[i].text = v
+                cells[i].text = _clean(v)
         d.add_paragraph("")
     d.save(out)
     return out

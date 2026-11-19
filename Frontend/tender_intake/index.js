@@ -176,7 +176,17 @@ function allBox(j,probs){
 
 function evBox(j){return (ev,idx)=>{
   const tender=ev.meta&&ev.meta['Tender No.']?String(ev.meta['Tender No.']):'Not stated';
-  const metaRows=Object.entries(ev.meta||{}).filter(([,value])=>String(value||'').trim()).map(([key,value])=>`<div class="detail"><b>${esc(key)}</b><span>${esc(value)}</span></div>`).join('');
+  const reportDetailOrder=['Tender No.','Tender Published Date','Bid Bond Expiry Date(s)'];
+  const metaRows=Object.entries(ev.meta||{})
+    .filter(([,value])=>String(value||'').trim())
+    .sort(([keyA],[keyB])=>{
+      const indexA=reportDetailOrder.indexOf(keyA);
+      const indexB=reportDetailOrder.indexOf(keyB);
+      const rankA=indexA===-1?reportDetailOrder.length:indexA;
+      const rankB=indexB===-1?reportDetailOrder.length:indexB;
+      return rankA-rankB;
+    })
+    .map(([key,value])=>`<div class="detail"><b>${esc(key)}</b><span>${esc(value)}</span></div>`).join('');
   const bidDetails=ev.bids&&Array.isArray(ev.bids.headers)&&Array.isArray(ev.bids.rows)?`<h4>Details of Bidders</h4><div class="bidder-details-grid">${ev.bids.rows.map(row=>{
     const bidder=row[0]||'Unnamed bidder';
     const fields=ev.bids.headers.slice(1).map((header,i)=>({header,value:row[i+1]||''})).filter(x=>String(x.value).trim());
