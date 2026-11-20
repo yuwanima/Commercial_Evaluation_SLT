@@ -1,5 +1,5 @@
 
-import re, shutil, sys, tempfile, time, uuid
+import io, re, shutil, sys, tempfile, time, uuid
 from pathlib import Path
 import os
 
@@ -93,6 +93,47 @@ def technical_closing_date(evals):
                 return value
     return None
 
+# Excel summaries kept in the excel_file table (View Evaluation). Order = display order.
+SAVED_KINDS = ("price", "eval", "gcc", "scc", "gct", "award")
+KIND_LABELS = {
+    "price": "Price Schedule summary",
+    "eval": "Technical evaluation summary",
+    "gcc": "GCC Document summary",
+    "scc": "SCC Document summary",
+    "gct": "GCT document summary",
+    "award": "Award recommendation summary",
+}
+EXCEL_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+def save_excel_outputs(job, detected):
+    """Store every Excel summary this job produced (price, technical, GCC, SCC, GCT) in the
+    excel_file table under its tender number. Returns (tender_no, saved names, problems)."""
+    numbers = list(dict.fromkeys(
+        str(n).strip() for n in (detected or [])
+        if str(n).strip() and str(n).strip().casefold() != "not found"))
+    tender_no = ", ".join(numbers) or "UNASSIGNED"
+    problems, saved = [], []
+    out = WORK / job / "out"
+    if not out.is_dir():
+        return tender_no, saved, problems
+    if not database_ready():
+        problems.append("Excel files were not saved: the tenderdb database could not be reached.")
+        return tender_no, saved, problems
+    for kind in SAVED_KINDS:
+        for path in sorted(out.glob(f"{OUTPUT_PREFIXES[kind]}*.xlsx")):
+            try:
+                tender_data.store_excel(tender_no, path.name, path.read_bytes())
+                saved.append(path.name)
+            except Exception as exc:
+                problems.append(f"{path.name}: could not be saved to the database ({exc})")
+    return tender_no, saved, problems
+
+def kind_of_filename(filename):
+    for kind in SAVED_KINDS:
+        if filename.startswith(OUTPUT_PREFIXES[kind]):
+            return kind
+    return None
+
 @app.get("/")
 def index():
     return send_from_directory(MAIN_FRONTEND_DIR, "main.html")
@@ -172,18 +213,22 @@ def process():
         tenders = [ev["meta"].get("Tender No.", "") for _, ev in evals]
         eval_path = out / f"Technical_Evaluation_Compliance{consolidate._tender_suffix(tenders)}.xlsx"
         build_eval_workbook(evals, eval_path)
+        tender_no, saved, save_problems = save_excel_outputs(job, tenders)
         return jsonify(job=job, eval=True, evals=[eval_to_json(label, parsed) for label, parsed in evals],
-                       problems=problems + extra_problems)
+                       problems=problems + extra_problems + save_problems, tender_no=tender_no, saved=saved)
 
     if mode == "price":
         res = pricesched.run(specs, WORK / job / "out")
         if not res["file"]:
             return jsonify(error="None of the price schedules could be read.", problems=res["problems"]), 422
+        tender_no, saved, save_problems = save_excel_outputs(job, res.get("tenders"))
         if res["errors"]:
             return jsonify(error=res["errors"][0], job=job, price=True, rows=res["rows"], errors=res["errors"],
-                           problems=res["problems"] + extra_problems), 422
+                           problems=res["problems"] + extra_problems + save_problems,
+                           tender_no=tender_no, saved=saved), 422
         return jsonify(job=job, price=True, rows=res["rows"], notes=res["notes"],
-                       problems=res["problems"] + extra_problems)
+                       problems=res["problems"] + extra_problems + save_problems,
+                       tender_no=tender_no, saved=saved)
 
     res = consolidate.run(specs, WORK / job / "out")
     if mode == "all":
@@ -241,6 +286,8 @@ def process():
         ] + price_res["errors"] + extra_problems
         if not (res["gcc"] or res["gct"] or res["scc"] or res["evals"] or price_res["file"]):
             return jsonify(error="None of the uploaded documents could be read.", problems=problems), 422
+        tender_no, saved, save_problems = save_excel_outputs(
+            job, (res.get("tenders") or []) + (price_res.get("tenders") or []))
         return jsonify(
             job=job, all=True, uploaded_count=len(specs), gcc=bool(res["gcc"]), gct=bool(res["gct"]),
             scc=bool(res["scc"]),
@@ -248,15 +295,18 @@ def process():
             rows=price_res["rows"], notes=price_res["notes"],
             award=bool(award_path and award_path.exists()), award_assessment=award_assessment,
             gcc_bidders=res["gcc_bidders"], gct_bidders=res["gct_bidders"], scc_bidders=res["scc_bidders"],
-            document_summaries=res["document_summaries"], problems=problems,
+            document_summaries=res["document_summaries"], problems=problems + save_problems,
+            tender_no=tender_no, saved=saved,
         )
     if not res["gcc"] and not res["gct"] and not res["scc"]:
         return jsonify(error="None of the files could be read.", problems=res["problems"]), 422
+    tender_no, saved, save_problems = save_excel_outputs(job, res.get("tenders"))
     return jsonify(job=job, gcc=bool(res["gcc"]), gct=bool(res["gct"]), scc=bool(res["scc"]),
                    eval=False, evals=[], gcc_bidders=res["gcc_bidders"],
                    gct_bidders=res["gct_bidders"], scc_bidders=res["scc_bidders"],
                    document_summaries=res["document_summaries"],
-                   problems=res["problems"] + extra_problems)
+                   problems=res["problems"] + extra_problems + save_problems,
+                   tender_no=tender_no, saved=saved)
 
 @app.get("/api/download/<job>/<kind>")
 def download(job, kind):
@@ -270,6 +320,46 @@ def download(job, kind):
     if not p.exists():
         abort(404)
     return send_file(p, as_attachment=True, download_name=p.name)
+
+@app.get("/api/tenders")
+def tenders_with_saved_files():
+    if not database_ready():
+        return jsonify(error="The tenderdb database could not be reached.", tenders=[]), 503
+    return jsonify(tenders=tender_data.tenders_with_excel())
+
+@app.get("/api/tender-files")
+def tender_saved_files():
+    tender_no = (request.args.get("tender_no") or "").strip()
+    if not tender_no:
+        return jsonify(error="tender_no is required."), 400
+    if not database_ready():
+        return jsonify(error="The tenderdb database could not be reached."), 503
+    latest = {}
+    for row in tender_data.excel_files_for_tender(tender_no):   # newest first
+        kind = kind_of_filename(row["filename"])
+        if kind and kind not in latest:
+            latest[kind] = row
+    files = []
+    for kind in SAVED_KINDS:
+        row = latest.get(kind)
+        files.append({
+            "kind": kind, "label": KIND_LABELS[kind],
+            "filename": row["filename"] if row else None,
+            "date": row["date"] if row else None, "time": row["time"] if row else None,
+            "size_bytes": row["size_bytes"] if row else None,
+            "url": f"/api/excel/{row['id']}" if row else None,
+        })
+    return jsonify(tender_no=tender_no, files=files)
+
+@app.get("/api/excel/<int:file_id>")
+def saved_excel(file_id):
+    if not database_ready():
+        abort(503)
+    found = tender_data.excel_file_content(file_id)
+    if not found:
+        abort(404)
+    name, content = found
+    return send_file(io.BytesIO(content), as_attachment=True, download_name=name, mimetype=EXCEL_MIME)
 
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=5000, debug=False)

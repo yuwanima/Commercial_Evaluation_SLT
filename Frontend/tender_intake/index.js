@@ -163,6 +163,36 @@ function panel(root,mode){
   };
 }
 
+const savedEvaluationRoot=document.getElementById('saved-evaluations');
+const savedEvaluationRefresh=document.getElementById('refresh-evaluations');
+function savedEvaluationMessage(message,error=false){
+  if(savedEvaluationRoot)savedEvaluationRoot.innerHTML=`<p class="saved-status${error?' saved-error':''}">${esc(message)}</p>`;
+}
+async function loadSavedEvaluations(){
+  if(!savedEvaluationRoot)return;
+  savedEvaluationMessage('Loading saved evaluations...');
+  try{
+    const response=await fetch('/api/tenders');
+    const data=await response.json();
+    if(!response.ok)throw new Error(data.error||'The saved evaluations could not be loaded.');
+    const tenders=Array.isArray(data.tenders)?data.tenders:[];
+    if(!tenders.length){savedEvaluationMessage('No generated Excel files have been saved yet. Upload documents to create an evaluation.');return;}
+    const records=await Promise.all(tenders.map(async tender=>{
+      const result=await fetch(`/api/tender-files?tender_no=${encodeURIComponent(tender.tender_no)}`);
+      const detail=await result.json();
+      if(!result.ok)throw new Error(detail.error||'Unable to load tender files.');
+      return detail;
+    }));
+    savedEvaluationRoot.innerHTML=records.map(record=>{
+      const files=(record.files||[]).filter(file=>file.filename);
+      const rows=files.length?files.map(file=>`<div class="saved-file-row"><span class="saved-file-label">${esc(file.label)}</span><a class="saved-download" href="${esc(file.url)}" download>Download</a></div>`).join(''):'<p class="saved-status">No generated summaries are available for this tender.</p>';
+      const first=files[0]||{};
+      return `<article class="saved-tender"><div class="saved-tender-meta"><span class="saved-date">${esc(first.date||'Date unavailable')} ${esc(first.time||'')}</span><strong>Tender No : ${esc(record.tender_no)}</strong></div><div class="saved-file-list">${rows}</div></article>`;
+    }).join('');
+  }catch(error){savedEvaluationMessage(error.message||'The saved evaluations could not be loaded.',true);}
+}
+if(savedEvaluationRefresh)savedEvaluationRefresh.onclick=loadSavedEvaluations;
+
 function allBox(j,probs){
   const dl=(k,t,b)=>`<a class="${j[k]?'':'off'}" href="/api/download/${j.job}/${k}"><b>⬇ ${t}</b><span>${j[k]?(b||[]).length+' bidder(s): '+esc((b||[]).join(', ')):'No matching files uploaded'}</span></a>`;
   const evaluations=j.evals||[], priceRows=j.rows||[];
@@ -244,7 +274,9 @@ panel(document.getElementById('p-all'),'all');
 document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('.tabs button').forEach(x=>x.classList.toggle('on',x===b));
   document.querySelectorAll('.panel').forEach(p=>p.hidden=p.id!=='p-'+b.dataset.tab);
-  try{location.hash=b.dataset.tab}catch(e){}});
+  try{location.hash=b.dataset.tab}catch(e){}
+  if(b.dataset.tab==='view')loadSavedEvaluations();
+});
 if(location.hash&&document.querySelector(`[data-tab="${location.hash.slice(1)}"]`))document.querySelector(`[data-tab="${location.hash.slice(1)}"]`).click();
 
 // Reuse the existing same-origin chatbot page in a resizable drawer.

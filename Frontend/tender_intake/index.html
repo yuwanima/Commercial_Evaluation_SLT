@@ -19,8 +19,8 @@
 </header>
 <main class="workspace-layout">
   <div class="wrap workspace-main">
-  <section class="workspace-intro" aria-labelledby="upload-page-title"><h1 id="upload-page-title">Upload Tender Documents</h1><p class="workspace-lead">Upload GCC, SCC, technical evaluation reports, and price documents together.</p></section>
   <nav class="tabs" role="tablist"><button type="button" class="on" data-tab="all" role="tab">Evaluation workspace <span aria-hidden="true">↗</span></button></nav>
+  <nav class="tabs" role="tablist"><button type="button" data-tab="view" role="tab">View Evaluation</button></nav>
   <div class="panel" id="p-all">
     <section class="upload-card">
       <div class="zone"><span class="dropzone-icon" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M9.5 24h13a5.2 5.2 0 0 0 .4-10.4A7 7 0 0 0 9.4 12a6 6 0 0 0 .1 12Z"/><path d="M16 23V15m0 0-3 3m3-3 3 3"/></svg></span><b>Drag &amp; drop your files here</b><span>or</span><div class="pick upload-choices"><label class="browse-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5h6l2 2H21v10H3z"/><path d="M3 9h18"/></svg>Browse Files<input class="f-files" type="file" multiple accept=".xlsx,.xlsm,.xls,.docx,.doc,.pdf,.zip"></label><label class="browse-button folder-button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5h6l2 2H21v10H3z"/><path d="M3 9h18"/></svg>Choose folder<input class="f-dir" type="file" webkitdirectory multiple></label></div></div>
@@ -43,6 +43,7 @@
     </section>
     <div class="out" id="results" aria-live="polite"></div>
   </div>
+  <section class="panel view-evaluation-panel" id="p-view" hidden><div class="saved-evaluation-card"><div class="saved-evaluation-heading"><div><p class="workspace-kicker"><span></span> DATABASE RECORDS</p><h2>View Evaluation</h2><p class="workspace-lead">Open generated Excel summaries saved for each tender.</p></div><button type="button" class="refresh-evaluations" id="refresh-evaluations">Refresh</button></div><div id="saved-evaluations" class="saved-evaluations" aria-live="polite"><p class="saved-status">Loading saved evaluations...</p></div></div></section>
 </div></main>
 <aside id="comops-panel" class="comops-panel" role="dialog" aria-labelledby="comops-panel-title" aria-hidden="true">
   <div class="comops-panel-toolbar">
