@@ -256,7 +256,7 @@ let complianceBarChart = null;
         return bubble;
     }
 
-    function appendTypingIndicator(message = "ComOps is thinking…") {
+    function appendTypingIndicator(message = "ComOps is preparing your answer…") {
         const bubble = createAssistantMessage();
         bubble.classList.add("typing-bubble");
         bubble.setAttribute("aria-label", message);
@@ -305,7 +305,7 @@ form.addEventListener("submit", async (event) => {
     welcomeScreen.classList.add("hidden");
     appendUserMessage(question, attachments);
     let typingIndicator = appendTypingIndicator(
-        attachments.length ? "Uploading and processing your vendor documents…" : "ComOps is thinking…"
+        attachments.length ? "Uploading and processing your vendor documents…" : "ComOps is preparing your answer…"
     );
     errorMessage.classList.add("hidden");
 
@@ -1043,6 +1043,23 @@ function displayComparison(data, question = "") {
     function showError(message) {
         errorMessage.textContent = message;
         errorMessage.classList.remove("hidden");
+    }
+
+    // When embedded in the evaluation page drawer, reuse its panel controls.
+    const expandButton = document.getElementById("comops-expand-button");
+    const closeButton = document.getElementById("comops-close-button");
+    try {
+        const parentDocument = window.parent !== window ? window.parent.document : null;
+        const parentExpand = parentDocument ? parentDocument.getElementById("comops-expand") : null;
+        const parentClose = parentDocument ? parentDocument.getElementById("comops-close") : null;
+        if (expandButton && closeButton && parentExpand && parentClose) {
+            expandButton.hidden = false;
+            closeButton.hidden = false;
+            expandButton.addEventListener("click", () => parentExpand.click());
+            closeButton.addEventListener("click", () => parentClose.click());
+        }
+    } catch (error) {
+        // Standalone /chatbot page or cross-origin parent: keep buttons hidden.
     }
 
 });
