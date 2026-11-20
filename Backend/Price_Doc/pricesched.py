@@ -1083,7 +1083,7 @@ def _ordinal(n):
     return f"{n}{'th' if 10 <= n % 100 <= 20 else {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')}"
 
 
-def rank_rows(res):
+def rank_rows(res, commercial_weight=100):
     """Financial evaluation status = place by price: the lowest quoted total is 1st.
     Totals in different currencies cannot be compared, so each currency is ranked on its own."""
     res.setdefault("errors", [])
@@ -1102,7 +1102,8 @@ def rank_rows(res):
     for cur, lst in groups.items():
         priced = sorted((r for r in lst if r["evaluated_total"] > 0), key=lambda r: r["evaluated_total"])
         score_rows = calculate_commercial_price_scores(
-            {r["bidder"]: r["evaluated_total"] for r in priced}
+            {r["bidder"]: r["evaluated_total"] for r in priced},
+            commercial_weight=commercial_weight,
         ) if priced else {}
         place, prev = 0, None
         for k, r in enumerate(priced, 1):
@@ -1134,7 +1135,21 @@ def _output_filename(entries):
     return "Price_Schedules" + (f"_{'-'.join(tenders)}" if tenders else "") + ".xlsx"
 
 
-def run(inputs, out, closing_date=None):
+def tender_numbers_from_inputs(inputs):
+    """Read tender numbers from uploaded schedules before scoring, without generating output."""
+    tenders, problems = [], []
+    with tempfile.TemporaryDirectory(prefix="price-tender-scan-") as temp_dir:
+        for _bidder, path, _original in C.collect(inputs, temp_dir, problems):
+            try:
+                tender = parse_price(path).get("tender")
+            except Exception:
+                continue
+            if tender and tender not in tenders:
+                tenders.append(tender)
+    return tenders
+
+
+def run(inputs, out, closing_date=None, commercial_weight=100):
     """-> dict(file, rows=[...], problems=[...])"""
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
@@ -1215,7 +1230,7 @@ def run(inputs, out, closing_date=None):
         for row in rows.values():
             row["source"] = ", ".join(row["source"])
             res["rows"].append(row)
-        rank_rows(res)
+        rank_rows(res, commercial_weight=commercial_weight)
         if any(row.get("commission_review_required") for row in res["rows"]):
             res["notes"].append(
                 "One or more foreign schedules state a separate local-agent commission. "

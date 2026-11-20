@@ -2,8 +2,9 @@
 
 The module deliberately separates a price-ranked front-runner from a final award
 recommendation.  A weighted recommendation is only calculated when the uploaded
-records contain the TET technical scores, a separate CET/commercial score for each
-eligible bidder, and an approved technical/commercial weighting that totals 100%.
+records contain a TET technical score, a commercial score from price schedules or
+an explicitly labelled evaluation result for each eligible bidder, and approved
+technical/commercial weightings that total 100%.
 The final award remains subject to the appropriate SLT Tender Board/DOA approval.
 """
 from __future__ import annotations
@@ -23,10 +24,31 @@ try:
 except ImportError:  # pragma: no cover - direct module use
     import evalreport
 
+try:
+    from ..score_calculator import calculate_weighted_scores
+except ImportError:  # pragma: no cover - direct module use
+    from score_calculator import calculate_weighted_scores
+
 
 def bidder_key(value: str) -> str:
     """Normalise bidder labels, including common legal suffixes, for exact matching."""
     words = re.findall(r"[a-z0-9]+", str(value or "").casefold().replace("&", " and "))
+    # Uploaded filenames frequently become the fallback bidder label.  Remove
+    # document-role words before matching, otherwise "Acme" and
+    # "Acme Price Document" are treated as different bidders.
+    document_suffixes = {
+        ("price", "document"), ("price", "schedule"), ("price", "doc"),
+        ("commercial", "document"), ("commercial", "evaluation"),
+        ("gcc", "form"), ("scc", "form"), ("gct", "form"), ("form",),
+    }
+    changed = True
+    while words and changed:
+        changed = False
+        for suffix in sorted(document_suffixes, key=len, reverse=True):
+            if len(words) >= len(suffix) and tuple(words[-len(suffix):]) == suffix:
+                words = words[:-len(suffix)]
+                changed = True
+                break
     suffixes = {
         ("private", "limited"), ("private", "ltd"), ("pvt", "limited"), ("pvt", "ltd"),
         ("proprietary", "limited"), ("proprietary", "ltd"), ("(pvt)", "ltd"),
@@ -445,6 +467,13 @@ def build_award_assessment(evaluations, price_rows, source_metadata=None):
                   and b["price"].get("amount") is not None and b["price"].get("currency")]
     currencies = {b["price"]["currency"] for b in comparable}
     one_currency = len(currencies) == 1 and len(comparable) >= 1
+    price_commercial_scores = {}
+    if one_currency:
+        for row in price_rows or []:
+            score = row.get("price_score")
+            key = bidder_key(row.get("bidder"))
+            if key and score is not None:
+                price_commercial_scores[key] = score
     all_eligible_priced = bool(eligible_keys) and all(
         next((b for b in bidders if bidder_key(b["bidder"]) == key and b.get("price")
               and b["price"].get("amount") is not None and b["price"].get("currency")), None)
@@ -479,24 +508,30 @@ def build_award_assessment(evaluations, price_rows, source_metadata=None):
                 amount = bidder["price"]["amount"]
                 bidder["normalized_price_score"] = round((lowest / amount) * 100, 4) if amount else None
 
+    for bidder in bidders:
+        price_score = price_commercial_scores.get(bidder_key(bidder["bidder"]))
+        if price_score is not None:
+            bidder["commercial_score"] = price_score
+
     weights = metadata.get("weights")
     weights_valid = bool(weights and weights.get("valid") and weights.get("approved"))
     has_technical_scores = bool(eligible_keys) and all(
         next((b for b in bidders if bidder_key(b["bidder"]) == key and b.get("technical_score") is not None), None)
         for key in eligible_keys
     )
-    has_cet_scores = bool(eligible_keys) and all(
+    has_commercial_scores = bool(eligible_keys) and all(
         next((b for b in bidders if bidder_key(b["bidder"]) == key and b.get("commercial_score") is not None), None)
         for key in eligible_keys
     )
-    if weights_valid and has_technical_scores and has_cet_scores:
+    if weights_valid and has_technical_scores and has_commercial_scores:
         for bidder in bidders:
             if bidder["eligibility_status"] != "eligible":
                 continue
-            bidder["overall_score"] = round(
-                bidder["technical_score"] * weights["technical"] / 100
-                + bidder["commercial_score"] * weights["commercial"] / 100, 4
+            weighted = calculate_weighted_scores(
+                bidder["technical_score"], bidder["commercial_score"],
+                weights["technical"], weights["commercial"],
             )
+            bidder.update({key: float(value) for key, value in weighted.items()})
         overall_ranked = sorted((b for b in bidders if b["overall_score"] is not None),
                                 key=lambda b: (-b["overall_score"], bidder_key(b["bidder"])))
         rank, previous = 0, None
@@ -505,7 +540,7 @@ def build_award_assessment(evaluations, price_rows, source_metadata=None):
                 rank, previous = position, bidder["overall_score"]
             bidder["overall_rank"] = rank
 
-    final_ready = (len(eligible_keys) >= 1 and weights_valid and has_technical_scores and has_cet_scores
+    final_ready = (len(eligible_keys) >= 1 and weights_valid and has_technical_scores and has_commercial_scores
                    and one_currency and all_eligible_priced and not review_keys and not commission_review)
     recommended = None
     if final_ready:
@@ -560,8 +595,8 @@ def build_award_assessment(evaluations, price_rows, source_metadata=None):
             blockers.append("The uploaded documents do not establish one valid, approved technical/commercial weighting totalling 100%.")
     if not has_technical_scores:
         blockers.append("Numeric technical evaluation scores were not extracted for every technically eligible bidder; compliance labels are not converted into marks.")
-    if not has_cet_scores:
-        blockers.append("Numeric CET/commercial evaluation scores were not extracted for every technically eligible bidder; a price-only score is not treated as a complete commercial evaluation.")
+    if not has_commercial_scores:
+        blockers.append("Numeric commercial scores were not available for every technically eligible bidder from the price schedules or a commercial evaluation report.")
 
     if decision == "recommendation_ready":
         status_text = "Preferred bidder identified — submit recommendation for Tender Board approval"
@@ -583,7 +618,7 @@ def build_award_assessment(evaluations, price_rows, source_metadata=None):
         "award_confirmation_sources": award_confirmation_sources,
         "weights": weights, "weights_valid": weights_valid,
         "technical_scores_complete": has_technical_scores,
-        "commercial_scores_complete": has_cet_scores,
+        "commercial_scores_complete": has_commercial_scores,
         "prices_comparable": one_currency and all_eligible_priced,
         "currency": next(iter(currencies)) if one_currency else None,
         "eligible_count": len(eligible_keys), "excluded_count": len(excluded_keys),
@@ -611,7 +646,7 @@ def build_award_workbook(assessment, output_path, tender=""):
     amber = "FFF2CC"
     red = "FCE4D6"
 
-    ws.merge_cells("A1:J1")
+    ws.merge_cells("A1:M1")
     ws["A1"] = "COMMERCIAL EVALUATION — AWARD ASSESSMENT"
     ws["A1"].font = Font(bold=True, color="FFFFFF", size=14)
     ws["A1"].fill = PatternFill("solid", fgColor=navy)
@@ -626,17 +661,18 @@ def build_award_workbook(assessment, output_path, tender=""):
     ws["A5"] = "Confirmed awarded bidder (document evidence)"
     ws["B5"] = assessment.get("awarded_bidder") or "No explicit award approval/notice detected"
     ws["A6"] = "Evaluation basis"
-    ws.merge_cells("B6:J6")
-    ws["B5"] = assessment.get("basis", "")
+    ws.merge_cells("B6:M6")
+    ws["B6"] = assessment.get("basis", "")
     for cell in ("A2", "A3", "A4", "A5", "A6"):
         ws[cell].font = Font(bold=True, color=navy)
     ws["B3"].fill = PatternFill("solid", fgColor=green if assessment.get("decision") == "recommendation_ready" else amber)
     ws["B4"].fill = PatternFill("solid", fgColor=green if assessment.get("recommended_bidder") else amber)
-    ws["B5"].alignment = Alignment(wrap_text=True, vertical="top")
     ws["B6"].alignment = Alignment(wrap_text=True, vertical="top")
 
-    headers = ["Bidder", "TET eligibility", "Technical score / 100", "Currency", "Evaluated price",
-               "Price rank", "Normalized price score", "CET score / 100", "Overall weighted score", "Source / notes"]
+    headers = ["Bidder", "TET eligibility", "Technical score / 100", "Technical weighting %",
+               "Weighted technical score", "Currency", "Evaluated price", "Price rank",
+               "Commercial score / 100", "Commercial weighting %", "Weighted commercial score",
+               "Overall weighted score", "Source / notes"]
     header_row = 7
     for col, header in enumerate(headers, 1):
         cell = ws.cell(header_row, col, header)
@@ -651,15 +687,18 @@ def build_award_workbook(assessment, output_path, tender=""):
         if price.get("source"):
             notes.append(f"Price source: {price['source']}")
         notes.extend(price.get("warnings", []))
+        weights = assessment.get("weights") or {}
         values = [
             bidder.get("bidder"), bidder.get("eligibility_status"), bidder.get("technical_score"),
+            weights.get("technical"), bidder.get("weighted_technical_score"),
             price.get("currency"), price.get("amount"), bidder.get("price_rank"),
-            bidder.get("normalized_price_score"), bidder.get("commercial_score"),
-            bidder.get("overall_score"), " | ".join(x for x in notes if x),
+            bidder.get("commercial_score"), weights.get("commercial"),
+            bidder.get("weighted_commercial_score"), bidder.get("overall_score"),
+            " | ".join(x for x in notes if x),
         ]
         for col, value in enumerate(values, 1):
             cell = ws.cell(row_idx, col, value)
-            cell.alignment = Alignment(vertical="top", wrap_text=(col in (1, 2, 10)))
+            cell.alignment = Alignment(vertical="top", wrap_text=(col in (1, 2, 13)))
         if bidder.get("eligibility_status") == "eligible":
             ws.cell(row_idx, 2).fill = PatternFill("solid", fgColor=green)
         elif bidder.get("eligibility_status") == "excluded":
@@ -667,39 +706,39 @@ def build_award_workbook(assessment, output_path, tender=""):
         else:
             ws.cell(row_idx, 2).fill = PatternFill("solid", fgColor=amber)
         if bidder.get("price") and bidder["price"].get("amount") is not None:
-            ws.cell(row_idx, 5).number_format = '#,##0.00'
-        for col in (3, 7, 8, 9):
+            ws.cell(row_idx, 7).number_format = '#,##0.00'
+        for col in (3, 4, 5, 9, 10, 11, 12):
             ws.cell(row_idx, col).number_format = '0.00'
 
     notes_row = header_row + len(assessment.get("bidders", [])) + 3
     ws.cell(notes_row, 1, "Outstanding checks / blockers")
     ws.cell(notes_row, 1).font = Font(bold=True, color="FFFFFF")
     ws.cell(notes_row, 1).fill = PatternFill("solid", fgColor=navy)
-    ws.merge_cells(start_row=notes_row, start_column=1, end_row=notes_row, end_column=10)
+    ws.merge_cells(start_row=notes_row, start_column=1, end_row=notes_row, end_column=13)
     for offset, note in enumerate(assessment.get("blockers", []) or ["No outstanding automated checks were identified."], 1):
         r = notes_row + offset
-        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=10)
+        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=13)
         ws.cell(r, 1, f"• {note}")
         ws.cell(r, 1).alignment = Alignment(wrap_text=True, vertical="top")
         ws.row_dimensions[r].height = 30
 
     manual_row = notes_row + len(assessment.get("blockers", [])) + 2
-    ws.merge_cells(start_row=manual_row, start_column=1, end_row=manual_row, end_column=10)
+    ws.merge_cells(start_row=manual_row, start_column=1, end_row=manual_row, end_column=13)
     ws.cell(manual_row, 1, "Manual / governance notes")
     ws.cell(manual_row, 1).font = Font(bold=True, color="FFFFFF")
     ws.cell(manual_row, 1).fill = PatternFill("solid", fgColor=navy)
     for offset, note in enumerate(assessment.get("manual_notes", []), 1):
         r = manual_row + offset
-        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=10)
+        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=13)
         ws.cell(r, 1, f"• {note}")
         ws.cell(r, 1).alignment = Alignment(wrap_text=True, vertical="top")
         ws.row_dimensions[r].height = 30
 
-    widths = [27, 20, 18, 13, 20, 12, 20, 17, 20, 65]
+    widths = [27, 20, 18, 17, 22, 13, 20, 12, 20, 17, 22, 20, 65]
     for col, width in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(col)].width = width
     ws.freeze_panes = "A8"
-    ws.auto_filter.ref = f"A{header_row}:J{header_row + len(assessment.get('bidders', []))}"
+    ws.auto_filter.ref = f"A{header_row}:M{header_row + len(assessment.get('bidders', []))}"
     for row in ws.iter_rows():
         for cell in row:
             if cell.value is not None:

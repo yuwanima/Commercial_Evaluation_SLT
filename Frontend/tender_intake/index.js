@@ -163,6 +163,36 @@ function panel(root,mode){
   };
 }
 
+const savedEvaluationRoot=document.getElementById('saved-evaluations');
+const savedEvaluationRefresh=document.getElementById('refresh-evaluations');
+function savedEvaluationMessage(message,error=false){
+  if(savedEvaluationRoot)savedEvaluationRoot.innerHTML=`<p class="saved-status${error?' saved-error':''}">${esc(message)}</p>`;
+}
+async function loadSavedEvaluations(){
+  if(!savedEvaluationRoot)return;
+  savedEvaluationMessage('Loading saved evaluations...');
+  try{
+    const response=await fetch('/api/tenders');
+    const data=await response.json();
+    if(!response.ok)throw new Error(data.error||'The saved evaluations could not be loaded.');
+    const tenders=Array.isArray(data.tenders)?data.tenders:[];
+    if(!tenders.length){savedEvaluationMessage('No generated Excel files have been saved yet. Upload documents to create an evaluation.');return;}
+    const records=await Promise.all(tenders.map(async tender=>{
+      const result=await fetch(`/api/tender-files?tender_no=${encodeURIComponent(tender.tender_no)}`);
+      const detail=await result.json();
+      if(!result.ok)throw new Error(detail.error||'Unable to load tender files.');
+      return detail;
+    }));
+    savedEvaluationRoot.innerHTML=records.map(record=>{
+      const files=(record.files||[]).filter(file=>file.filename);
+      const rows=files.length?files.map(file=>`<div class="saved-file-row"><span class="saved-file-label">${esc(file.label)}</span><a class="saved-download" href="${esc(file.url)}" download>Download</a></div>`).join(''):'<p class="saved-status">No generated summaries are available for this tender.</p>';
+      const first=files[0]||{};
+      return `<article class="saved-tender"><div class="saved-tender-meta"><span class="saved-date">${esc(first.date||'Date unavailable')} ${esc(first.time||'')}</span><strong>Tender No : ${esc(record.tender_no)}</strong></div><div class="saved-file-list">${rows}</div></article>`;
+    }).join('');
+  }catch(error){savedEvaluationMessage(error.message||'The saved evaluations could not be loaded.',true);}
+}
+if(savedEvaluationRefresh)savedEvaluationRefresh.onclick=loadSavedEvaluations;
+
 function allBox(j,probs){
   const dl=(k,t,b)=>`<a class="${j[k]?'':'off'}" href="/api/download/${j.job}/${k}"><b>⬇ ${t}</b><span>${j[k]?(b||[]).length+' bidder(s): '+esc((b||[]).join(', ')):'No matching files uploaded'}</span></a>`;
   const evaluations=j.evals||[], priceRows=j.rows||[];
@@ -229,7 +259,7 @@ function awardBox(j){
   const rows=(a.bidders||[]).map(b=>{
     const p=b.price||{};
     const rank=b.price_rank?`${b.price_rank}${b.price_rank===1?'st':b.price_rank===2?'nd':b.price_rank===3?'rd':'th'}${b.price_rank_scope?` (${esc(b.price_rank_scope)})`:''}`:'—';
-    return `<tr><td>${esc(b.bidder)}</td><td>${esc((b.eligibility_status||'review_required').replaceAll('_',' '))}</td><td>${money(p)}</td><td>${rank}</td><td>${b.technical_score==null?'Not provided':esc(Number(b.technical_score).toFixed(2))}</td><td>${b.commercial_score==null?'Not provided':esc(Number(b.commercial_score).toFixed(2))}</td><td>${b.overall_score==null?'Not calculated':esc(Number(b.overall_score).toFixed(2))}</td></tr>`;
+    return `<tr><td>${esc(b.bidder)}</td><td>${esc((b.eligibility_status||'review_required').replaceAll('_',' '))}</td><td>${money(p)}</td><td>${rank}</td><td>${b.technical_score==null?'Not provided':esc(Number(b.technical_score).toFixed(2))}</td><td>${b.weighted_technical_score==null?'Not calculated':esc(Number(b.weighted_technical_score).toFixed(2))}</td><td>${b.commercial_score==null?'Not provided':esc(Number(b.commercial_score).toFixed(2))}</td><td>${b.weighted_commercial_score==null?'Not calculated':esc(Number(b.weighted_commercial_score).toFixed(2))}</td><td>${b.overall_score==null?'Not calculated':esc(Number(b.overall_score).toFixed(2))}</td></tr>`;
   }).join('');
   const weights=a.weights&&a.weights.technical!==undefined&&a.weights.commercial!==undefined?`Technical ${esc(a.weights.technical)}% / Commercial ${esc(a.weights.commercial)}% (${a.weights.approved?'approval evidence found':'approval not verified'})`:'Not found in uploaded approved strategy documents';
   const blockers=(a.blockers||[]).map(x=>`<li>${esc(x)}</li>`).join('');
@@ -237,14 +267,16 @@ function awardBox(j){
   const awardConfirmation=a.award_confirmation_status==='confirmed_from_document'
     ?`<div class="award-confirmed"><span>Confirmed awarded bidder (explicit approval/award document)</span><strong>${esc(a.awarded_bidder||'')}</strong><small>Source: ${esc((a.award_confirmation_sources||[]).join(', '))}</small></div>`
     :`<div class="award-pending"><span>Actual awarded bidder</span><strong>${a.award_confirmation_status==='review_required'?'Award document needs manual verification':'Not established by uploaded award/approval documents'}</strong></div>`;
-  return `<div class="res award-res">${awardConfirmation}<div class="award-status ${badgeClass}">${esc(a.status_text||'Award assessment unavailable')}</div>${a.recommended_bidder?`<div class="award-winner"><span>${ready?'Preferred bidder for Tender Board consideration':'Provisional price front-runner'}</span><strong>${esc(a.recommended_bidder)}</strong>${a.recommended_score!=null?`<small>Overall weighted score: ${esc(Number(a.recommended_score).toFixed(2))}/100</small>`:a.recommended_price?`<small>Evaluated price: ${money(a.recommended_price)}</small>`:''}</div>`:`<p class="award-no-winner">The system cannot identify a defensible preferred bidder from the uploaded evidence yet.</p>`}<div class="award-meta"><span><b>Weighting record:</b> ${weights}</span><span><b>Eligible bidders:</b> ${esc(a.eligible_count??0)}</span><span><b>Excluded:</b> ${esc(a.excluded_count??0)}</span><span><b>Manual review:</b> ${esc(a.review_count??0)}</span></div><p class="award-basis"><b>Assessment basis:</b> ${esc(a.basis||'')}</p><div class="tw"><table class="price-table award-table"><thead><tr><th>Bidder</th><th>TET eligibility</th><th>Evaluated price</th><th>Price rank</th><th>Technical score /100</th><th>CET score /100</th><th>Overall score</th></tr></thead><tbody>${rows||'<tr><td colspan="7">No bidder assessment data extracted.</td></tr>'}</tbody></table></div>${blockers?`<div class="award-blockers"><h4>Information still required before a final recommendation</h4><ul>${blockers}</ul></div>`:''}${notes?`<details class="award-notes"><summary>Governance and manual notes</summary><ul>${notes}</ul></details>`:''}<a class="xl" href="/api/download/${j.job}/award">⬇ Download Award Assessment Excel</a></div>`;
+  return `<div class="res award-res">${awardConfirmation}<div class="award-status ${badgeClass}">${esc(a.status_text||'Award assessment unavailable')}</div>${a.recommended_bidder?`<div class="award-winner"><span>${ready?'Preferred bidder for Tender Board consideration':'Provisional price front-runner'}</span><strong>${esc(a.recommended_bidder)}</strong>${a.recommended_score!=null?`<small>Overall weighted score: ${esc(Number(a.recommended_score).toFixed(2))}/100</small>`:a.recommended_price?`<small>Evaluated price: ${money(a.recommended_price)}</small>`:''}</div>`:`<p class="award-no-winner">The system cannot identify a defensible preferred bidder from the uploaded evidence yet.</p>`}<div class="award-meta"><span><b>Weighting record:</b> ${weights}</span><span><b>Eligible bidders:</b> ${esc(a.eligible_count??0)}</span><span><b>Excluded:</b> ${esc(a.excluded_count??0)}</span><span><b>Manual review:</b> ${esc(a.review_count??0)}</span></div><p class="award-basis"><b>Assessment basis:</b> ${esc(a.basis||'')}</p><div class="tw"><table class="price-table award-table"><thead><tr><th>Bidder</th><th>TET eligibility</th><th>Evaluated price</th><th>Price rank</th><th>Technical score /100</th><th>Weighted technical score</th><th>Commercial score /100</th><th>Weighted commercial score</th><th>Overall score</th></tr></thead><tbody>${rows||'<tr><td colspan="9">No bidder assessment data extracted.</td></tr>'}</tbody></table></div>${blockers?`<div class="award-blockers"><h4>Information still required before a final recommendation</h4><ul>${blockers}</ul></div>`:''}${notes?`<details class="award-notes"><summary>Governance and manual notes</summary><ul>${notes}</ul></details>`:''}<a class="xl" href="/api/download/${j.job}/award">⬇ Download Award Assessment Excel</a></div>`;
 }
 
 panel(document.getElementById('p-all'),'all');
 document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('.tabs button').forEach(x=>x.classList.toggle('on',x===b));
   document.querySelectorAll('.panel').forEach(p=>p.hidden=p.id!=='p-'+b.dataset.tab);
-  try{location.hash=b.dataset.tab}catch(e){}});
+  try{location.hash=b.dataset.tab}catch(e){}
+  if(b.dataset.tab==='view')loadSavedEvaluations();
+});
 if(location.hash&&document.querySelector(`[data-tab="${location.hash.slice(1)}"]`))document.querySelector(`[data-tab="${location.hash.slice(1)}"]`).click();
 
 // Reuse the existing same-origin chatbot page in a resizable drawer.
