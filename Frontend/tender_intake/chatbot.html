@@ -11,27 +11,45 @@
 
     <header class="chatbot-header">
         <div class="brand-lockup">
-            <h1>ComOps</h1>
-            <p>SLT Procurement Assistant</p>
+            <img class="brand-avatar" src="/chatbot.jpg" alt="ComOps robot">
+            <div class="brand-text">
+                <h1>ComOps</h1>
+                <p>SLT Procurement AI Assistant</p>
+            </div>
+            <span class="assistant-status"><i aria-hidden="true"></i>Online</span>
         </div>
         <div class="header-actions">
             <button type="button" id="new-chat-button" class="new-chat-button">New chat</button>
+            <button type="button" id="comops-expand-button" class="header-icon-button" aria-label="Maximize ComOps panel" title="Maximize panel" hidden>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+            </button>
+            <button type="button" id="comops-close-button" class="header-icon-button" aria-label="Close ComOps panel" title="Close panel" hidden>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+            </button>
         </div>
     </header>
 
     <main class="chatbot-container">
         <section id="answer-section" class="conversation-shell" aria-label="ComOps conversation">
             <div id="welcome-screen" class="welcome-screen">
-                <img class="welcome-avatar" src="/chatbot.jpg" alt="ComOps robot">
-                <p class="eyebrow">SLT PROCUREMENT ASSISTANT</p>
-                <h2>Hello, I’m ComOps.</h2>
-                <p class="welcome-copy">Ask about SLT procurement contracts, clauses, requirements and conditions. Answers are grounded in the available contract documents.</p>
-                <div class="suggestion-grid" aria-label="Suggested questions">
-                    <button type="button" class="suggestion-card" data-prompt="What are the requirements for Performance Security?">What are the requirements for Performance Security?</button>
-                    <button type="button" class="suggestion-card" data-prompt="What is the validity period of the Bid Security?">What is the validity period of the Bid Security?</button>
-                    <button type="button" class="suggestion-card" data-prompt="What are the supplier's obligations under the contract?">What are the supplier’s obligations under the contract?</button>
-                    <button type="button" class="suggestion-card" data-prompt="What are the delivery requirements?">What are the delivery requirements?</button>
-                    <button type="button" class="suggestion-card" data-prompt="What are the conditions for contract termination?">What are the conditions for contract termination?</button>
+                <div class="welcome-hero">
+                    <div class="welcome-art">
+                        <img class="welcome-robot" src="/chatbot.jpg" alt="ComOps robot">
+                    </div>
+                    <div class="welcome-content">
+                        <p class="eyebrow">SLT PROCUREMENT ASSISTANT</p>
+                        <h2>Hello, I’m <span class="brand-accent">ComOps</span>.</h2>
+                        <p class="welcome-subtitle">Your SLT Procurement AI Assistant</p>
+                        <p class="welcome-copy">Ask me anything about SLT procurement contracts, clauses, requirements and conditions.</p>
+                        <span class="welcome-underline" aria-hidden="true"></span>
+                        <div class="suggestion-grid" aria-label="Suggested questions">
+                            <button type="button" class="suggestion-card" data-prompt="What are the requirements for Performance Security?"><span class="suggestion-text">What are the requirements for Performance Security?</span></button>
+                            <button type="button" class="suggestion-card" data-prompt="What is the validity period of the Bid Security?"><span class="suggestion-text">What is the validity period of the Bid Security?</span></button>
+                            <button type="button" class="suggestion-card" data-prompt="What are the supplier's obligations under the contract?"><span class="suggestion-text">What are the supplier’s obligations under the contract?</span></button>
+                            <button type="button" class="suggestion-card" data-prompt="What are the delivery requirements?"><span class="suggestion-text">What are the delivery requirements?</span></button>
+                            <button type="button" class="suggestion-card suggestion-card-wide" data-prompt="What are the evaluation requirements?"><span class="suggestion-text">What are the evaluation requirements?</span></button>
+                        </div>
+                    </div>
                 </div>
             </div>
             <div id="conversation-messages" class="conversation-messages"></div>
@@ -85,7 +103,7 @@
                     </div>
                 </div>
             </div>
-            <p class="conversation-note">Answers use the current question and retrieved evidence. Previous messages are not automatically sent as context.</p>
+            <p class="conversation-note">Grounded answers from SLT procurement documents.</p>
         </form>
 
         <section id="loading" class="loading hidden" role="status">Searching contract documents and generating your answer…</section>

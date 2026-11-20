@@ -1191,8 +1191,8 @@ button.btn.go:focus-visible, .pick label:focus-within { outline: 3px solid rgba(
 .saved-date { color: #111827; font-size: 13px; font-weight: 800; letter-spacing: .01em; }
 .saved-file-row { display: grid; grid-template-columns: 1fr auto; gap: 18px; align-items: center; padding: 13px 18px; border-bottom: 1px solid #edf2f5; }
 .saved-file-row:last-child { border-bottom: 0; }
-.saved-file-label { color: #152b40; font-size: 14px; font-weight: 650; }
-.saved-download { color: #0056a2; font-size: 14px; font-weight: 800; text-decoration: underline; }
+.saved-file-label { color: #152b40; font-size: 14px; font-weight: 400; }
+.saved-download { color: #0056a2; font-size: 14px; font-weight: 400; text-decoration: underline; }
 @media (max-width: 560px) { .saved-evaluation-heading, .saved-tender-meta { display: block; } .refresh-evaluations { margin-top: 14px; } .saved-tender-meta strong { display: block; margin-top: 7px; text-align: left; } }
 .out .recommendation-table-section { border-color: #9abbd6; border-radius: 13px; box-shadow: 0 7px 18px rgba(7,48,91,.07); }
 .out .recommendation-table thead th, .out table.mx th { background: #0b4779; }

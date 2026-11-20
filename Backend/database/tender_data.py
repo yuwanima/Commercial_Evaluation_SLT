@@ -5,6 +5,10 @@ Works on PostgreSQL (production) and SQLite (testing). Choose with the DATABASE_
 """
 import os, datetime as dt
 from pathlib import Path
+try:
+    from ..score_calculator import calculate_weighted_scores
+except ImportError:  # pragma: no cover - direct execution from Backend/
+    from score_calculator import calculate_weighted_scores
 
 # DATABASE_URL comes from the environment; when it is not set, the .env sitting beside
 # this file is used (…/tenderdb), so uploaded documents land in the shared database.
@@ -57,6 +61,20 @@ CREATE TABLE IF NOT EXISTS tender(
     closing_date    DATE,
     po_date         DATE,
     awarded_company TEXT
+);
+CREATE TABLE IF NOT EXISTS scores(
+    tender_no                TEXT NOT NULL,
+    bidder_name              TEXT NOT NULL,
+    technical_score          NUMERIC(7,2),
+    commercial_score         NUMERIC(7,2),
+    technical_weighting_rate NUMERIC(5,2),
+    commercial_weighting_rate NUMERIC(5,2),
+    weighted_technical_score NUMERIC(7,2),
+    weighted_commercial_score NUMERIC(7,2),
+    overall_score            NUMERIC(7,2),
+    date                     DATE NOT NULL DEFAULT CURRENT_DATE,
+    time                     TIME NOT NULL DEFAULT CURRENT_TIME,
+    PRIMARY KEY (tender_no, bidder_name)
 );
 CREATE TABLE IF NOT EXISTS bid_line(
     id           %s,
@@ -130,6 +148,7 @@ def init():
         for stmt in (SCHEMA + EXCEL_SCHEMA).split(";"):
             if stmt.strip():
                 cur.execute(stmt)
+        _ensure_scores_schema(cur)
         # Add content_hash to older uploaded_document tables (created before dedup).
         try:
             cur.execute("ALTER TABLE uploaded_document ADD COLUMN content_hash TEXT")
@@ -140,6 +159,67 @@ def init():
                         "ON uploaded_document(filename, content_hash)")
         except Exception:
             pass
+
+
+def _score_columns(cur):
+    if PG:
+        cur.execute("SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = current_schema() AND table_name='scores'")
+        return {row[0] for row in cur.fetchall()}
+    cur.execute("PRAGMA table_info(scores)")
+    return {row[1] for row in cur.fetchall()}
+
+
+def _ensure_scores_schema(cur):
+    """Upgrade the former tender-level weighting table to bidder-level score rows."""
+    columns = _score_columns(cur)
+    if "bidder_name" not in columns:
+        # Preserve the old weighting records before replacing its tender-only key.
+        if PG:
+            cur.execute("ALTER TABLE scores RENAME TO scores_weightings_legacy")
+        else:
+            cur.execute("ALTER TABLE scores RENAME TO scores_weightings_legacy")
+        cur.execute("""CREATE TABLE scores(
+            tender_no TEXT NOT NULL, bidder_name TEXT NOT NULL,
+            technical_score NUMERIC(7,2), commercial_score NUMERIC(7,2),
+            technical_weighting_rate NUMERIC(5,2), commercial_weighting_rate NUMERIC(5,2),
+            weighted_technical_score NUMERIC(7,2), weighted_commercial_score NUMERIC(7,2),
+            overall_score NUMERIC(7,2), date DATE NOT NULL DEFAULT CURRENT_DATE,
+            time TIME NOT NULL DEFAULT CURRENT_TIME, PRIMARY KEY(tender_no,bidder_name))""")
+        legacy_columns = _score_columns_for_table(cur, "scores_weightings_legacy")
+        technical_column = next((name for name in ("technical_weighting_rate", "technical_weighting")
+                                 if name in legacy_columns), None)
+        commercial_column = next((name for name in ("commercial_weighting_rate", "commercial_weighting")
+                                  if name in legacy_columns), None)
+        if "tender_no" in legacy_columns and technical_column and commercial_column:
+            cur.execute(f"INSERT INTO scores(tender_no,bidder_name,technical_weighting_rate,"
+                        f"commercial_weighting_rate) SELECT tender_no,'Approval Criteria',"
+                        f"{technical_column},{commercial_column} FROM scores_weightings_legacy")
+        columns = _score_columns(cur)
+
+    additions = {
+        "technical_score": "NUMERIC(7,2)", "commercial_score": "NUMERIC(7,2)",
+        "technical_weighting_rate": "NUMERIC(5,2)", "commercial_weighting_rate": "NUMERIC(5,2)",
+        "weighted_technical_score": "NUMERIC(7,2)", "weighted_commercial_score": "NUMERIC(7,2)",
+        "overall_score": "NUMERIC(7,2)",
+    }
+    for column, sql_type in additions.items():
+        if column not in columns:
+            cur.execute(f"ALTER TABLE scores ADD COLUMN {column} {sql_type}")
+    columns = _score_columns(cur)
+    if "date" not in columns:
+        cur.execute("ALTER TABLE scores ADD COLUMN date DATE")
+    if "time" not in columns:
+        cur.execute("ALTER TABLE scores ADD COLUMN time TIME")
+
+
+def _score_columns_for_table(cur, table):
+    if PG:
+        cur.execute("SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = current_schema() AND table_name=%s", (table,))
+        return {row[0] for row in cur.fetchall()}
+    cur.execute(f"PRAGMA table_info({table})")
+    return {row[1] for row in cur.fetchall()}
 
 
 def _now():
@@ -181,6 +261,46 @@ def _norm(t):
     return re.sub(r"[^a-z0-9]+", " ", (t or "").lower()).strip()
 
 
+def _bidder_key(value):
+    """Return the comparison key used to merge bidder/company labels.
+
+    Technical reports and price schedules often spell the same legal entity
+    differently (for example ``ABC (Pvt) Ltd`` and ``ABC Private Limited``).
+    Keep the display label from the first source, but use this key for the
+    database upsert so those documents update one score row.
+    """
+    import re
+    words = re.findall(r"[a-z0-9]+", str(value or "").casefold().replace("&", " and "))
+    document_suffixes = {
+        ("price", "document"), ("price", "schedule"), ("price", "doc"),
+        ("commercial", "document"), ("commercial", "evaluation"),
+        ("gcc", "form"), ("scc", "form"), ("gct", "form"), ("form",),
+    }
+    changed = True
+    while words and changed:
+        changed = False
+        for suffix in sorted(document_suffixes, key=len, reverse=True):
+            if len(words) >= len(suffix) and tuple(words[-len(suffix):]) == suffix:
+                words = words[:-len(suffix)]
+                changed = True
+                break
+    suffixes = {
+        ("private", "limited"), ("private", "ltd"), ("pvt", "limited"),
+        ("pvt", "ltd"), ("proprietary", "limited"), ("proprietary", "ltd"),
+        ("limited",), ("ltd",), ("plc",), ("incorporated",), ("inc",),
+        ("llc",), ("company",), ("co",),
+    }
+    changed = True
+    while words and changed:
+        changed = False
+        for suffix in sorted(suffixes, key=len, reverse=True):
+            if len(words) >= len(suffix) and tuple(words[-len(suffix):]) == suffix:
+                words = words[:-len(suffix)]
+                changed = True
+                break
+    return "".join(words)
+
+
 def set_tender(tender_no, closing_date=None, po_date=None, awarded_company=None):
     """Record the dates of a tender and (after the decision) which company won it."""
     with session() as cur:
@@ -190,6 +310,143 @@ def set_tender(tender_no, closing_date=None, po_date=None, awarded_company=None)
                     "po_date=COALESCE(excluded.po_date,tender.po_date), "
                     "awarded_company=COALESCE(excluded.awarded_company,tender.awarded_company)",
                     (tender_no, closing_date, po_date, awarded_company))
+
+
+def store_scores(tender_no, technical_weighting, commercial_weighting):
+    """Store approved weightings and apply them to any bidder score rows already saved."""
+    technical_weighting = _bounded_score(technical_weighting, "Technical weighting")
+    commercial_weighting = _bounded_score(commercial_weighting, "Commercial weighting")
+    if technical_weighting is None or commercial_weighting is None:
+        raise ValueError("Both approved weightings are required.")
+    if abs(technical_weighting + commercial_weighting - 100) > 0.01:
+        raise ValueError("Technical and commercial weightings must total 100%.")
+    with session() as cur:
+        cur.execute(
+            f"UPDATE scores SET technical_weighting_rate={PH}, commercial_weighting_rate={PH}, "
+            "date=CURRENT_DATE, time=CURRENT_TIME "
+            f"WHERE tender_no={PH}",
+            (technical_weighting, commercial_weighting, tender_no))
+        if cur.rowcount == 0:
+            store_bidder_score_rows_in_cursor(cur, tender_no, [{"bidder": "Approval Criteria"}],
+                                              technical_weighting, commercial_weighting)
+        else:
+            cur.execute(f"SELECT bidder_name FROM scores WHERE tender_no={PH}", (tender_no,))
+            bidders = [row[0] for row in cur.fetchall()]
+            store_bidder_score_rows_in_cursor(
+                cur, tender_no, [{"bidder": bidder} for bidder in bidders],
+                technical_weighting, commercial_weighting)
+    return tender_no
+
+
+def score_weightings(tender_no):
+    """Return the most recently stored approved weightings for a tender, if present."""
+    with session() as cur:
+        cur.execute(f"SELECT technical_weighting_rate,commercial_weighting_rate FROM scores "
+                    f"WHERE tender_no={PH} AND (technical_weighting_rate IS NOT NULL "
+                    "OR commercial_weighting_rate IS NOT NULL) "
+                    "ORDER BY CASE WHEN bidder_name='Approval Criteria' THEN 0 ELSE 1 END LIMIT 1",
+                    (tender_no,))
+        row = cur.fetchone()
+    return ({"technical": float(row[0]) if row[0] is not None else None,
+             "commercial": float(row[1]) if row[1] is not None else None} if row else None)
+
+
+def store_bidder_score_rows(tender_no, rows, technical_weighting=None, commercial_weighting=None):
+    """Upsert technical/commercial scores and their weighted results per bidder."""
+    with session() as cur:
+        store_bidder_score_rows_in_cursor(cur, tender_no, rows, technical_weighting, commercial_weighting)
+
+
+def _bounded_score(value, label):
+    if value is None:
+        return None
+    value = float(value)
+    if not 0 <= value <= 100:
+        raise ValueError(f"{label} must be between 0 and 100.")
+    return round(value, 2)
+
+
+def store_bidder_score_rows_in_cursor(cur, tender_no, rows, technical_weighting=None,
+                                      commercial_weighting=None):
+    technical_weighting = (_bounded_score(technical_weighting, "Technical weighting")
+                           if technical_weighting is not None else None)
+    commercial_weighting = (_bounded_score(commercial_weighting, "Commercial weighting")
+                            if commercial_weighting is not None else None)
+    for row in rows:
+        bidder = str(row.get("bidder") or row.get("bidder_name") or "").strip()
+        if not bidder:
+            continue
+        # A previous upload may have created two rows for the same company
+        # because one source used a filename fallback such as "Price
+        # Document". Consolidate all equivalent labels before calculating so
+        # technical and commercial values cannot remain split across rows.
+        cur.execute(f"SELECT bidder_name,technical_score,commercial_score,"
+                    f"technical_weighting_rate,commercial_weighting_rate FROM scores "
+                    f"WHERE tender_no={PH}", (tender_no,))
+        equivalent_rows = [saved for saved in cur.fetchall()
+                           if _bidder_key(saved[0]) == _bidder_key(bidder)]
+        if equivalent_rows:
+            # Prefer the shortest label, which is normally the legal bidder
+            # name rather than a document filename.
+            bidder = min((saved[0] for saved in equivalent_rows), key=len)
+            existing = tuple(next((saved[index] for saved in equivalent_rows
+                                   if saved[index] is not None), None)
+                             for index in range(1, 5))
+            duplicate_names = [saved[0] for saved in equivalent_rows if saved[0] != bidder]
+            if duplicate_names:
+                placeholders = ",".join([PH] * len(duplicate_names))
+                cur.execute(f"DELETE FROM scores WHERE tender_no={PH} AND bidder_name IN ({placeholders})",
+                            (tender_no, *duplicate_names))
+        else:
+            existing = (None, None, None, None)
+        technical = _bounded_score(row.get("technical_score"), "Technical score") \
+            if row.get("technical_score") is not None else existing[0]
+        commercial = _bounded_score(row.get("commercial_score"), "Commercial score") \
+            if row.get("commercial_score") is not None else existing[1]
+        technical_weight = technical_weighting if technical_weighting is not None else existing[2]
+        commercial_weight = commercial_weighting if commercial_weighting is not None else existing[3]
+        # A weighting-only upload is represented temporarily by the approval
+        # row. Propagate those rates to the first real bidder row as well.
+        if technical_weight is None or commercial_weight is None:
+            cur.execute(f"SELECT technical_weighting_rate,commercial_weighting_rate FROM scores "
+                        f"WHERE tender_no={PH} AND bidder_name={PH}",
+                        (tender_no, "Approval Criteria"))
+            approval = cur.fetchone()
+            if approval:
+                technical_weight = technical_weight if technical_weight is not None else approval[0]
+                commercial_weight = commercial_weight if commercial_weight is not None else approval[1]
+        calculated = calculate_weighted_scores(technical, commercial,
+                                               technical_weight, commercial_weight)
+        weighted_technical = calculated["weighted_technical_score"]
+        weighted_commercial = calculated["weighted_commercial_score"]
+        overall = calculated["overall_score"]
+        weighted_technical = float(weighted_technical) if weighted_technical is not None else None
+        weighted_commercial = float(weighted_commercial) if weighted_commercial is not None else None
+        overall = float(overall) if overall is not None else None
+        values = (technical, commercial, technical_weight, commercial_weight,
+                  weighted_technical, weighted_commercial, overall, tender_no, bidder)
+        cur.execute(
+            f"UPDATE scores SET technical_score={PH},commercial_score={PH},"
+            f"technical_weighting_rate={PH},commercial_weighting_rate={PH},"
+            f"weighted_technical_score={PH},weighted_commercial_score={PH},overall_score={PH},"
+            f"date=CURRENT_DATE,time=CURRENT_TIME WHERE tender_no={PH} AND bidder_name={PH}",
+            values)
+        if cur.rowcount == 0:
+            cur.execute(
+                f"INSERT INTO scores(tender_no,bidder_name,technical_score,commercial_score,"
+                f"technical_weighting_rate,commercial_weighting_rate,weighted_technical_score,"
+                f"weighted_commercial_score,overall_score,date,time) "
+                f"VALUES({','.join([PH] * 9)},CURRENT_DATE,CURRENT_TIME)",
+                (tender_no, bidder, technical, commercial, technical_weight, commercial_weight,
+                 weighted_technical, weighted_commercial, overall))
+
+    # Approval Criteria is only a staging row for a weighting-only upload. Once
+    # an actual bidder exists, keep scores table rows bidder-centric.
+    cur.execute(f"SELECT COUNT(*) FROM scores WHERE tender_no={PH} AND bidder_name <> {PH}",
+                (tender_no, "Approval Criteria"))
+    if cur.fetchone()[0]:
+        cur.execute(f"DELETE FROM scores WHERE tender_no={PH} AND bidder_name={PH}",
+                    (tender_no, "Approval Criteria"))
 
 
 def store_bid_lines(tender_no, company, supply_type, currency, lines, source_file=None, user=None):

@@ -49,8 +49,8 @@ In **Process all documents** mode, the system now builds an **Award Assessment**
 1. Uses the TET report's overall bidder result and explicitly identified mandatory/drop-dead criteria to establish who may proceed to commercial evaluation. A non-mandatory non-compliance is recorded for review; it is not treated as an automatic disqualification when the TET report explicitly records the bidder as qualified. Ambiguous or conflicting TET outcomes are held for manual review.
 2. Extracts bidder quoted totals from the price schedules. When no filled-in price schedule is parsed for a bidder, an explicit bidder/quoted-total table in the TET report may be used as a clearly labelled fallback.
 3. Compares eligible bidders only when the prices can be compared in the same stated currency. It does not convert currencies or add a separate local-agent commission whose currency is unclear.
-4. Extracts approved technical/commercial weightages and numeric CET commercial scores from uploaded strategy/evaluation documents where their labels are explicit. Numeric TET technical scores are extracted from the TET report where present.
-5. Calculates the overall weighted score only when every technically eligible bidder has a numeric TET score and CET score and the uploaded approved weightages total 100%. Otherwise it shows the lowest eligible price as a **provisional price leader**, or reports that the available evidence is insufficient.
+4. Reads the technical and commercial weighting percentages from an uploaded approval criteria PDF and stores them with bidder scores. Technical scores come from the TET report; commercial scores are calculated from comparable price schedules as `(lowest evaluated price / bidder evaluated price) × 100`.
+5. Calculates weighted technical and commercial scores as `score × approved weighting / 100`, then sums them for the overall score. A weighted recommendation requires a score for each technically eligible bidder, one comparable currency, and approved weightings totaling 100%. Otherwise it shows the lowest eligible price as a **provisional price leader**, or reports that the available evidence is insufficient.
 
 The award workbook contains the bidder-by-bidder evidence, price ranks, scores, data sources and outstanding checks. Download it using **Award Assessment Excel**.
 
@@ -58,6 +58,6 @@ The screen separates a **preferred bidder / provisional price leader** from an *
 
 ### Documents that produce a complete weighted recommendation
 
-Upload the TET report, bidder price schedules, the approved tender strategy/evaluation-criteria document showing technical and commercial weightages, and the CET report containing each eligible bidder's numeric commercial score. The TET report must contain a clear technical qualification outcome and numeric technical scores if a composite ranking is required. To confirm an actual award, also upload the Tender Board/authorized approval resolution or formal letter/notice of award.
+Upload the TET report, bidder price schedules, and the approved criteria PDF showing technical and commercial weightages. The TET report must contain a clear technical qualification outcome and numeric technical scores if a composite ranking is required. To confirm an actual award, also upload the Tender Board/authorized approval resolution or formal letter/notice of award.
 
 **Governance safeguard:** the system produces an evaluation result or recommendation for review; it never itself awards the tender. The preferred bidder remains subject to TET/CET review, documented clarifications/negotiations where applicable, the relevant Tender Board/DOA approval, and contract execution. A price-only leader is not labelled as an awarded bidder.
