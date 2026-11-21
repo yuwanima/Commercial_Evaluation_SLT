@@ -141,22 +141,23 @@ function panel(root,mode){
       const probs=visibleProblems.length?'<b style="color:var(--bad);font-size:14px">Some files could not be read:</b><ul class="warn">'+visibleProblems.map(p=>'<li>'+esc(p)+'</li>').join('')+'</ul>':'';
       if(!r.ok){
         setProgress('error',j.error||'The evaluation service returned an error. Review the message below and try again.');
-        out.innerHTML=`<div class="msg">${esc(j.error||'Something went wrong')}${j.problems?'<ul class="warn">'+j.problems.map(p=>'<li>'+esc(p)+'</li>').join('')+'</ul>':''}</div>`;return
+        out.innerHTML=`<div class="msg">${esc(j.error||'Something went wrong')}${j.problems?'<ul class="warn">'+j.problems.map(p=>'<li>'+esc(p)+'</li>').join('')+'</ul>':''}</div>${approvalCriteriaBox(j.approval_criteria)}`;return
       }
       const completedTypes=[];
       if(j.eval)completedTypes.push('technical evaluation reports');
       if(j.gcc||j.gct||j.scc)completedTypes.push('GCC/GCT/SCC compliance documents');
       if(j.price)completedTypes.push('price documents');
+      if(Array.isArray(j.approval_criteria)&&j.approval_criteria.length)completedTypes.push('approval criteria');
       const completionMessage=completedTypes.length
         ?`The service returned results for ${completedTypes.join(', ')}. Review the results and any extraction notes below.`
         :'The service returned a response. Review the results and any extraction notes below.';
       setProgress('complete',completionMessage);
       if(mode==='all'){out.innerHTML=allBox(j,probs);return}
-      if(mode==='eval'){out.innerHTML=(j.evals||[]).map(evBox(j)).join('')+(probs?`<div class="res">${probs}</div>`:'');return}
-      if(mode==='price'){out.innerHTML=priceBox(j,probs);return}
+      if(mode==='eval'){out.innerHTML=approvalCriteriaBox(j.approval_criteria)+(j.evals||[]).map(evBox(j)).join('')+(probs?`<div class="res">${probs}</div>`:'');return}
+      if(mode==='price'){out.innerHTML=approvalCriteriaBox(j.approval_criteria)+priceBox(j,probs);return}
       const dl=(k,t,b)=>`<a class="${j[k]?'':'off'}" href="/api/download/${j.job}/${k}"><b>⬇ ${t}</b><span>${j[k]?b.length+' bidder(s): '+esc(b.join(', ')):'No files uploaded'}</span></a>`;
       const summaries=(j.document_summaries||[]).map(s=>`<div class="doc-summary"><h4>${esc(s.bidder||'Unknown bidder')} — ${esc(s.type||'Document')} summary</h4><ul>${s.points.filter(p=>!/^signature section:/i.test(p)&&!/^bidder name(?: source)?:/i.test(p)).map(p=>`<li>${esc(p)}</li>`).join('')}</ul></div>`).join('');
-      out.innerHTML=`<div class="res"><h3>✓ Comparison ready</h3><div style="color:var(--mut);font-size:14px">Download your Excel files:</div>
+      out.innerHTML=approvalCriteriaBox(j.approval_criteria)+`<div class="res"><h3>✓ Comparison ready</h3><div style="color:var(--mut);font-size:14px">Download your Excel files:</div>
         <div class="dl">${dl('gcc','GCC_Compliance_Comparison.xlsx',j.gcc_bidders)}${dl('gct','GCT_Compliance_Comparison.xlsx',j.gct_bidders)}${dl('scc','SCC_Compliance_Comparison.xlsx',j.scc_bidders)}</div>${summaries?`<div class="doc-summaries"><h4>Document checks</h4>${summaries}</div>`:''}${probs}</div>`;
     }catch(e){setProgress('error','The request did not return a usable processing response. Review the error below before retrying.');out.innerHTML='<div class="msg">Could not reach the server: '+esc(String(e))+'</div>'}
     finally{go.disabled=false;go.textContent=goText}
@@ -197,10 +198,17 @@ function allBox(j,probs){
   const dl=(k,t,b)=>`<a class="${j[k]?'':'off'}" href="/api/download/${j.job}/${k}"><b>⬇ ${t}</b><span>${j[k]?(b||[]).length+' bidder(s): '+esc((b||[]).join(', ')):'No matching files uploaded'}</span></a>`;
   const evaluations=j.evals||[], priceRows=j.rows||[];
   const comparison=j.gcc||j.gct||j.scc?`<div class="all-section"><h2>GCC / GCT / SCC Comparison</h2><div class="res"><h3>✓ Comparison ready</h3><div class="dl">${dl('gcc','GCC_Compliance_Comparison.xlsx',j.gcc_bidders)}${dl('gct','GCT_Compliance_Comparison.xlsx',j.gct_bidders)}${dl('scc','SCC_Compliance_Comparison.xlsx',j.scc_bidders)}</div></div></div>`:`<div class="all-section empty-section"><h2>GCC / GCT / SCC Comparison</h2><p>No GCC, GCT, or SCC documents detected.</p></div>`;
+  const awardSection=j.award_assessment?`<div class="all-section"><h2>Weighted Bidder Ranking</h2>${awardBox(j)}${rankedBiddersBox(j)}</div>`:'';
   const evaluationDetails=evaluations.map((ev,i)=>`<details class="result-details"><summary>${esc(ev.label||`Technical report ${i+1}`)}</summary>${evBox(j)(ev,i)}</details>`).join('');
   const evaluationSection=evaluations.length?`<div class="all-section"><h2>Technical Evaluation</h2>${evaluationDetails}</div>`:`<div class="all-section empty-section"><h2>Technical Evaluation</h2><p>No technical evaluation reports detected.</p></div>`;
   const priceSection=j.price?`<div class="all-section"><h2>Price Schedule</h2><details class="result-details" open><summary>View all price results (${priceRows.length})</summary>${priceBox(j,'')}</details></div>`:`<div class="all-section empty-section"><h2>Price Schedule</h2><p>No price schedules detected.</p></div>`;
-  return `<div class="all-results">${priceSection}${evaluationSection}${comparison}${probs?`<div class="res">${probs}</div>`:''}</div>`;
+  return `<div class="all-results">${approvalCriteriaBox(j.approval_criteria)}${priceSection}${awardSection}${evaluationSection}${comparison}${probs?`<div class="res">${probs}</div>`:''}</div>`;
+}
+
+function approvalCriteriaBox(criteria){
+  if(!Array.isArray(criteria)||!criteria.length)return '';
+  const rows=criteria.map(item=>`<tr><td>${esc(item.tender_no||'Not identified')}</td><td>${esc(item.technical_weighting)}%</td><td>${esc(item.commercial_weighting)}%</td><td>${item.saved?'Saved to database':'Read, but not saved'}</td></tr>`).join('');
+  return `<section class="all-section"><h2>Approval Criteria</h2><div class="res"><h3>Approval weightings extracted</h3><div class="tw"><table class="price-table"><thead><tr><th>Tender No</th><th>Technical weighting</th><th>Commercial weighting</th><th>Database status</th></tr></thead><tbody>${rows}</tbody></table></div></div></section>`;
 }
 
 function evBox(j){return (ev,idx)=>{
@@ -242,12 +250,13 @@ function priceBox(j,probs){
   });
   const currencyGroups=new Map();
   rows.forEach(r=>{
-    const currency=String(r.currency||'Not stated');
+    const currency=r.evaluated_total_lkr!=null?'LKR (converted)':String(r.currency||'Not stated');
     if(!currencyGroups.has(currency))currencyGroups.set(currency,[]);
     currencyGroups.get(currency).push(r);
   });
-  const tables=[...currencyGroups].map(([currency,group])=>`<div class="price-currency-group"><h4>Currency: ${esc(currency)}</h4><table class="price-table"><thead><tr><th>Bidder</th><th>Currency</th><th>Evaluated price</th><th>Price rank</th><th>Price score / 100</th></tr></thead><tbody>${group.map(r=>`<tr><td>${esc(r.bidder)}</td><td>${esc(r.currency||'Not stated')}</td><td>${esc(fmtMoney(r.evaluated_total??r.total))}</td><td>${esc(r.rank?`${r.rank}${r.rank===1?'st':r.rank===2?'nd':r.rank===3?'rd':'th'}`:'Not ranked')}</td><td>${r.price_score==null?'Not calculated':esc(Number(r.price_score).toFixed(2))}</td></tr>`).join('')}</tbody></table></div>`).join('')||'<table class="price-table"><tbody><tr><td colspan="5">No bidder prices detected.</td></tr></tbody></table>';
-  const notes=(j.notes||[]).concat(rows.flatMap(r=>r.warnings||[]));
+  const tables=[...currencyGroups].map(([currency,group])=>`<div class="price-currency-group"><h4>Currency: ${esc(currency)}</h4><table class="price-table"><thead><tr><th>Bidder</th><th>Currency</th><th>Evaluated price</th><th>Price rank</th><th>Price score / 100</th></tr></thead><tbody>${group.map(r=>{const amount=r.evaluated_total_lkr!=null?r.evaluated_total_lkr:(r.evaluated_total??r.total);return `<tr><td>${esc(r.bidder)}</td><td>${esc(r.evaluated_total_lkr!=null?'LKR (converted)':(r.currency||'Not stated'))}</td><td>${esc(fmtMoney(amount))}</td><td>${esc(r.rank?`${r.rank}${r.rank===1?'st':r.rank===2?'nd':r.rank===3?'rd':'th'}`:'Not ranked')}</td><td>${r.price_score==null?'Not calculated':esc(Number(r.price_score).toFixed(2))}</td></tr>`}).join('')}</tbody></table></div>`).join('')||'<table class="price-table"><tbody><tr><td colspan="5">No bidder prices detected.</td></tr></tbody></table>';
+  const conversionNotes=rows.filter(r=>r.evaluated_total_lkr!=null&&r.conversion_note).map(r=>r.conversion_note);
+  const notes=[...new Set((j.notes||[]).concat(rows.flatMap(r=>r.warnings||[]),conversionNotes))];
   return `<div class="res"><h3>✓ Price schedule extraction ready</h3><div class="price-summary">Extracted bidder price schedules (${rows.length})</div>${tables}${notes.length?`<ul class="warn">${notes.map(esc).map(x=>`<li>${x}</li>`).join('')}</ul>`:''}<a class="xl" href="/api/download/${j.job}/price">⬇ Download Price Schedules Excel</a>${probs?`<div>${probs}</div>`:''}</div>`;
 }
 function awardBox(j){
@@ -268,6 +277,15 @@ function awardBox(j){
     ?`<div class="award-confirmed"><span>Confirmed awarded bidder (explicit approval/award document)</span><strong>${esc(a.awarded_bidder||'')}</strong><small>Source: ${esc((a.award_confirmation_sources||[]).join(', '))}</small></div>`
     :`<div class="award-pending"><span>Actual awarded bidder</span><strong>${a.award_confirmation_status==='review_required'?'Award document needs manual verification':'Not established by uploaded award/approval documents'}</strong></div>`;
   return `<div class="res award-res">${awardConfirmation}<div class="award-status ${badgeClass}">${esc(a.status_text||'Award assessment unavailable')}</div>${a.recommended_bidder?`<div class="award-winner"><span>${ready?'Preferred bidder for Tender Board consideration':'Provisional price front-runner'}</span><strong>${esc(a.recommended_bidder)}</strong>${a.recommended_score!=null?`<small>Overall weighted score: ${esc(Number(a.recommended_score).toFixed(2))}/100</small>`:a.recommended_price?`<small>Evaluated price: ${money(a.recommended_price)}</small>`:''}</div>`:`<p class="award-no-winner">The system cannot identify a defensible preferred bidder from the uploaded evidence yet.</p>`}<div class="award-meta"><span><b>Weighting record:</b> ${weights}</span><span><b>Eligible bidders:</b> ${esc(a.eligible_count??0)}</span><span><b>Excluded:</b> ${esc(a.excluded_count??0)}</span><span><b>Manual review:</b> ${esc(a.review_count??0)}</span></div><p class="award-basis"><b>Assessment basis:</b> ${esc(a.basis||'')}</p><div class="tw"><table class="price-table award-table"><thead><tr><th>Bidder</th><th>TET eligibility</th><th>Evaluated price</th><th>Price rank</th><th>Technical score /100</th><th>Weighted technical score</th><th>Commercial score /100</th><th>Weighted commercial score</th><th>Overall score</th></tr></thead><tbody>${rows||'<tr><td colspan="9">No bidder assessment data extracted.</td></tr>'}</tbody></table></div>${blockers?`<div class="award-blockers"><h4>Information still required before a final recommendation</h4><ul>${blockers}</ul></div>`:''}${notes?`<details class="award-notes"><summary>Governance and manual notes</summary><ul>${notes}</ul></details>`:''}<a class="xl" href="/api/download/${j.job}/award">⬇ Download Award Assessment Excel</a></div>`;
+}
+
+function rankedBiddersBox(j){
+  const ranked=(j.award_assessment?.bidders||[])
+    .filter(b=>b.eligibility_status==='eligible'&&b.overall_score!=null)
+    .sort((a,b)=>Number(b.overall_score)-Number(a.overall_score)||String(a.bidder).localeCompare(String(b.bidder)))
+    .slice(0,3);
+  const rows=ranked.map((b,i)=>`<tr><td>${i+1}</td><td>${esc(b.bidder)}</td><td>${b.price?.currency?esc(b.price.currency):'—'} ${esc(fmtMoney(b.price?.amount))}</td><td>${b.weighted_technical_score==null?'—':esc(Number(b.weighted_technical_score).toFixed(2))}</td><td>${b.weighted_commercial_score==null?'—':esc(Number(b.weighted_commercial_score).toFixed(2))}</td><td>${esc(Number(b.overall_score).toFixed(2))}</td></tr>`).join('');
+  return `<h3>Top three eligible bidders by overall score</h3><div class="tw"><table class="price-table"><thead><tr><th>Rank</th><th>Supplier</th><th>Evaluated amount</th><th>Weighted technical</th><th>Weighted commercial</th><th>Overall score</th></tr></thead><tbody>${rows||'<tr><td colspan="6">No complete overall scores available. Upload approved weightings, technical results, and price schedules to rank bidders.</td></tr>'}</tbody></table></div>`;
 }
 
 panel(document.getElementById('p-all'),'all');

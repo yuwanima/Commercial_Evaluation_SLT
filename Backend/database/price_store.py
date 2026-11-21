@@ -11,15 +11,19 @@ def _lines(kind, items):
         qty = P.num(it.get("qty"))
         desc = re.sub(r"\s+", " ", P._text(it.get("desc"))).strip()
         if kind == "local":
-            unit = P.num(it.get("unit_incl"))
-            if unit is None and P.num(it.get("unit_excl")) is not None:
-                unit = P.num(it["unit_excl"]) * (1 + sum(P.num(it.get(x)) or 0 for x in ("vat", "nbt", "other")) / 100)
-            total = unit * (qty if qty is not None else 1) if unit is not None else None
+            base_unit = P.num(it.get("unit_excl"))
+            incl = P.num(it.get("unit_incl"))
+            if incl is None and base_unit is not None:
+                incl = base_unit * (1 + sum(P.num(it.get(x)) or 0 for x in ("vat", "nbt", "other")) / 100)
+            total = incl * (qty if qty is not None else 1) if incl is not None else None
+            unit = base_unit
         else:
             total, notes = P.part_total("foreign", [it])           # CIF for the line (same rule as the Excel sheet)
             total = total or None
             unit = total / qty if total and qty else total
-        out.append(dict(description=desc, qty=qty, unit_price=unit, line_total=total,
+            base_unit = P._foreign_unit_price(it)
+        out.append(dict(description=desc, qty=qty, unit_price=unit, unit_price_excl_tax=base_unit,
+                        line_total=total,
                         origin=P._text(it.get("origin")) or None))
     return out
 

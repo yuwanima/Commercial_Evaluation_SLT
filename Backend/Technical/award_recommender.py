@@ -37,7 +37,7 @@ def bidder_key(value: str) -> str:
     # document-role words before matching, otherwise "Acme" and
     # "Acme Price Document" are treated as different bidders.
     document_suffixes = {
-        ("price", "document"), ("price", "schedule"), ("price", "doc"),
+        ("price", "document"), ("price", "documents"), ("price", "schedule"), ("price", "doc"),
         ("commercial", "document"), ("commercial", "evaluation"),
         ("gcc", "form"), ("scc", "form"), ("gct", "form"), ("form",),
     }
@@ -523,7 +523,11 @@ def build_award_assessment(evaluations, price_rows, source_metadata=None):
         next((b for b in bidders if bidder_key(b["bidder"]) == key and b.get("commercial_score") is not None), None)
         for key in eligible_keys
     )
-    if weights_valid and has_technical_scores and has_commercial_scores:
+    # Calculate each bidder independently. A missing score for one bidder must
+    # not hide the weighted components that can already be calculated for the
+    # others. calculate_weighted_scores leaves the unavailable component and
+    # overall_score as None until both source scores are present.
+    if weights_valid:
         for bidder in bidders:
             if bidder["eligibility_status"] != "eligible":
                 continue
@@ -531,7 +535,8 @@ def build_award_assessment(evaluations, price_rows, source_metadata=None):
                 bidder["technical_score"], bidder["commercial_score"],
                 weights["technical"], weights["commercial"],
             )
-            bidder.update({key: float(value) for key, value in weighted.items()})
+            bidder.update({key: float(value) if value is not None else None
+                           for key, value in weighted.items()})
         overall_ranked = sorted((b for b in bidders if b["overall_score"] is not None),
                                 key=lambda b: (-b["overall_score"], bidder_key(b["bidder"])))
         rank, previous = 0, None
@@ -648,10 +653,9 @@ def build_award_workbook(assessment, output_path, tender=""):
 
     ws.merge_cells("A1:M1")
     ws["A1"] = "COMMERCIAL EVALUATION — AWARD ASSESSMENT"
-    ws["A1"].font = Font(bold=True, color="FFFFFF", size=14)
-    ws["A1"].fill = PatternFill("solid", fgColor=navy)
-    ws["A1"].alignment = Alignment(vertical="center")
-    ws.row_dimensions[1].height = 28
+    ws["A1"].font = Font(bold=True, color=navy, size=16)
+    ws["A1"].alignment = Alignment(horizontal="left", vertical="center")
+    ws.row_dimensions[1].height = 30
     ws["A2"] = "Tender No."
     ws["B2"] = tender or "Not extracted"
     ws["A3"] = "Assessment status"
@@ -661,13 +665,16 @@ def build_award_workbook(assessment, output_path, tender=""):
     ws["A5"] = "Confirmed awarded bidder (document evidence)"
     ws["B5"] = assessment.get("awarded_bidder") or "No explicit award approval/notice detected"
     ws["A6"] = "Evaluation basis"
-    ws.merge_cells("B6:M6")
+    for row in range(2, 7):
+        ws.merge_cells(start_row=row, start_column=2, end_row=row, end_column=13)
+        ws.cell(row, 2).alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+        ws.row_dimensions[row].height = 30 if row < 6 else 46
     ws["B6"] = assessment.get("basis", "")
     for cell in ("A2", "A3", "A4", "A5", "A6"):
         ws[cell].font = Font(bold=True, color=navy)
+        ws[cell].alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
     ws["B3"].fill = PatternFill("solid", fgColor=green if assessment.get("decision") == "recommendation_ready" else amber)
     ws["B4"].fill = PatternFill("solid", fgColor=green if assessment.get("recommended_bidder") else amber)
-    ws["B6"].alignment = Alignment(wrap_text=True, vertical="top")
 
     headers = ["Bidder", "TET eligibility", "Technical score / 100", "Technical weighting %",
                "Weighted technical score", "Currency", "Evaluated price", "Price rank",
@@ -741,7 +748,7 @@ def build_award_workbook(assessment, output_path, tender=""):
     ws.auto_filter.ref = f"A{header_row}:M{header_row + len(assessment.get('bidders', []))}"
     for row in ws.iter_rows():
         for cell in row:
-            if cell.value is not None:
+            if cell.value is not None and cell.row > 6:
                 cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     wb.save(output_path)

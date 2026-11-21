@@ -75,10 +75,58 @@ def norm_status(raw):
         return "Complied"
     return "Unclear"
 
+def parse_bid_filename(path):
+    """Extract supplier, tender number, and document type from a structured bid filename."""
+    stem = Path(path).stem.replace("_", " ")
+    type_match = re.search(
+        r"(?i)[ _-]+(?P<type>price|gcc|scc|gct|other)"
+        r"(?:[ _-]+(?:document|documents|form))?$",
+        stem,
+    )
+    if not type_match:
+        return {"supplier": None, "tender_no": None, "document_type": None}
+
+    document_type = {
+        "price": "Price", "gcc": "GCC", "scc": "SCC",
+        "gct": "GCT", "other": "Other",
+    }[type_match.group("type").casefold()]
+    stem = stem[:type_match.start()].rstrip(" _-")
+    tender_match = re.search(
+        r"(?i)(?:^|[ _-])(?P<tender>(?:[a-z]{1,8}[ _-]+)?\d{2,}(?:[ _-]+\d{2,})+)$",
+        stem,
+    )
+    tender_no = None
+    if tender_match:
+        tender_no = re.sub(r"[ _-]+", "/", tender_match.group("tender").strip())
+        stem = stem[:tender_match.start()].rstrip(" _-")
+    supplier = re.sub(r"\s+", " ", re.sub(r"[_-]+", " ", stem)).strip()
+    return {"supplier": supplier or None, "tender_no": tender_no,
+            "document_type": document_type}
+
+
 def derive_bidder_name(path, root):
     if root and root != path.parent and root in path.parents:
-        return path.relative_to(root).parts[0]
+        relative_parts = path.relative_to(root).parts
+        # A supplier folder is the strongest label. If the archive contains a
+        # single file at its root, continue parsing that file's structured name.
+        if len(relative_parts) > 1:
+            folder_metadata = parse_bid_filename(relative_parts[0])
+            if folder_metadata["document_type"] and folder_metadata["supplier"]:
+                return folder_metadata["supplier"]
+            return relative_parts[0]
+    structured = parse_bid_filename(path)
+    if structured["document_type"] and structured["supplier"]:
+        return structured["supplier"]
     stem = path.stem.replace("_", " ")             # "\b" does not see a boundary next to "_"
+    # Uploaded bid files commonly use:
+    # SupplierName-TenderNo-Price|GCC|SCC|GCT|Other.ext
+    # Strip the type and tender identifier from the right so supplier names may
+    # themselves contain spaces or hyphens without being split incorrectly.
+    stem = re.sub(r"(?i)[ _-]+(?:price|gcc|scc|gct|other)(?:[ _-]+(?:document|documents|form))?$", "", stem)
+    stem = re.sub(
+        r"(?i)[ _-]+(?:[a-z]{1,8}[ _-]?)?\d{2,}(?:[ _-]\d{2,})+$",
+        "", stem,
+    )
     stem = re.sub(r"\(\d+\)", " ", stem)
     stem = re.sub(r"(?i)\b(copy of|compliance for|compliance|general conditions of contract|"
                   r"special conditions of contract|gcc|scc|goods|services|local|foreign|"

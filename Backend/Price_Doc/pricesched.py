@@ -393,17 +393,14 @@ def part_total(kind, items, include_commission=False):
                 qty = 1
             total += qty * incl
         else:
-            cif = num(it.get("cif"))
-            if cif is None:
-                fob = num(it.get("fob_total"))
-                if fob is None and num(it.get("fob_unit")) is not None:
-                    fob = (qty if qty is not None else 1) * num(it.get("fob_unit"))
-                if fob is None:
-                    notes.append(f"line {k}: no cost")
-                    continue
-                cif = fob + (num(it.get("insurance")) or 0) + (num(it.get("freight")) or 0)
-                notes.append(f"line {k}: CIF/CIP cost calculated")
-            total += cif + ((num(it.get("commission")) or 0) if include_commission else 0)
+            cif_unit = _foreign_unit_price(it)
+            if cif_unit is None:
+                notes.append(f"line {k}: no cost")
+                continue
+            if num(it.get("cif")) is None or num(it.get("fob_unit")) is not None:
+                notes.append(f"line {k}: CIF/CIP unit price calculated")
+            total += cif_unit * (qty if qty is not None else 1)
+            total += (num(it.get("commission")) or 0) if include_commission else 0
     return total, notes
 
 
@@ -433,28 +430,28 @@ def evaluated_total(kind, items):
 
 
 def _line_money(kind, item):
-    """Per-line (unit_price, line_total) the same way the Excel computes it.
+    """Return (unit price before SSCL/VAT, evaluated line total).
 
     Used both for the workbook and for storing the line in tenderdb.bid_line.
     """
     qty = num(item.get("qty"))
     if kind == "local":
-        unit = num(item.get("unit_incl"))
-        if unit is None:
-            ex = num(item.get("unit_excl"))
-            if ex is not None:
-                unit = ex * (1 + sum(num(item.get(x)) or 0 for x in ("vat", "sscl", "other")) / 100)
-        total = unit * (qty if qty is not None else 1) if unit is not None else None
+        unit = num(item.get("unit_excl"))
+        incl = num(item.get("unit_incl"))
+        if incl is None and unit is not None:
+            incl = unit * (1 + sum(num(item.get(x)) or 0 for x in ("vat", "sscl", "other")) / 100)
+        total = incl * (qty if qty is not None else 1) if incl is not None else None
     else:
-        total = num(item.get("cif"))
-        if total is None:
-            fob = num(item.get("fob_total"))
-            if fob is None and num(item.get("fob_unit")) is not None:
-                fob = (qty if qty is not None else 1) * num(item.get("fob_unit"))
-            if fob is not None:
-                total = fob + (num(item.get("insurance")) or 0) + (num(item.get("freight")) or 0)
-        unit = total / qty if total and qty else total
+        unit = _foreign_unit_price(item)
+        total = unit * (qty if qty is not None else 1) if unit is not None else None
     return unit, total
+
+
+def _base_unit_price(kind, item):
+    """Return the quoted unit price before SSCL and VAT for bid history."""
+    if kind == "local":
+        return num(item.get("unit_excl"))
+    return _foreign_unit_price(item)
 
 
 def store_price_entries(entries):
@@ -484,12 +481,14 @@ def store_price_entries(entries):
         lines = []
         for item in entry["items"]:
             unit, total = _line_money(kind, item)
+            base_unit = _base_unit_price(kind, item)
             if unit is None and total is None:
                 continue
             lines.append(dict(
                 description=re.sub(r"\s+", " ", _text(item.get("desc"))).strip(),
                 qty=num(item.get("qty")),
                 unit_price=unit,
+                unit_price_excl_tax=base_unit,
                 line_total=total,
                 origin=_text(item.get("origin")) or None,
             ))
@@ -522,6 +521,8 @@ def _body(ws, r, c, v, fmt=None, fill=None, bold=False, center=False):
 
 
 MONEY = "#,##0.00"
+FOREIGN_SSCL_RATE = 2.5
+FOREIGN_VAT_RATE = 18.0
 ANNEXURE_TEMPLATE = Path(__file__).resolve().parent / "templates" / "Annexure - For ComOps Project.xlsx"
 
 
@@ -541,6 +542,41 @@ def _tax_amounts(base, sscl_rate, vat_rate):
     sscl = base * sscl_rate / 100 if sscl_rate is not None else None
     vat = base * vat_rate / 100 if vat_rate is not None else None
     return sscl, vat
+
+
+def _foreign_unit_price(item):
+    """Calculate foreign CIP/CIF unit price from total line costs."""
+    qty = num(item.get("qty")) or 1
+    fob_unit = num(item.get("fob_unit"))
+    if fob_unit is None:
+        fob_total = num(item.get("fob_total"))
+        if fob_total is not None:
+            fob_unit = fob_total / qty
+    if fob_unit is not None:
+        total = (
+            fob_unit * qty
+            + (num(item.get("insurance")) or 0)
+            + (num(item.get("freight")) or 0)
+        )
+        return total / qty
+    cif_total = num(item.get("cif"))
+    return cif_total / qty if cif_total is not None else None
+
+
+def _foreign_evaluated_lkr_total(items, selling_rate):
+    """Calculate foreign evaluated LKR total using Excel's T-column basis."""
+    if selling_rate is None:
+        return None
+    total = 0.0
+    for item in items:
+        unit_usd = _foreign_unit_price(item)
+        if unit_usd is None:
+            continue
+        qty = num(item.get("qty")) or 1
+        unit_lkr = round(unit_usd * selling_rate, 2)
+        unit_with_sscl = round(unit_lkr * (1 + FOREIGN_SSCL_RATE / 100), 2)
+        total += qty * unit_with_sscl
+    return round(total, 2)
 
 
 def _annexure_rows(entries):
@@ -571,6 +607,11 @@ def _annexure_rows(entries):
             else:
                 unit_with_sscl = unit_excl + (sscl_amount or 0)     # T: with SSCL, without VAT
                 unit_with_taxes = unit_with_sscl + (vat_amount or 0)  # U: with SSCL & VAT
+            if entry["kind"] != "local":
+                foreign_unit = _foreign_unit_price(item)
+                unit_excl = foreign_unit
+                unit_with_sscl = foreign_unit
+                unit_with_taxes = foreign_unit
             rows.append({
                 "number": descriptions[key],
                 "option": option_numbers[key],
@@ -582,7 +623,7 @@ def _annexure_rows(entries):
                 "fob": num(item.get("fob_unit")),
                 "insurance": num(item.get("insurance")),
                 "freight": num(item.get("freight")),
-                "cif": num(item.get("cif")),
+                "cif": _foreign_unit_price(item) if entry["kind"] != "local" else None,
                 "unit_excl": unit_excl,
                 "unit_with_sscl": unit_with_sscl,
                 "unit_incl": unit_with_taxes,
@@ -658,15 +699,28 @@ def _report_date(value):
 
 
 def _usd_rate_pair(rate_date):
-    """Return CBSL web buy/sell rates for a date, or ``None`` if unavailable."""
+    """Return official CBSL buy/sell rates, using stored rates only if CBSL is unavailable."""
     if not rate_date:
         return None
     try:
         buy = cbsl_web_rate(rate_date, "buy")["rate"]
         sell = cbsl_web_rate(rate_date, "sell")["rate"]
+        return float(buy), float(sell)
     except Exception:
+        if T is not None:
+            try:
+                buy = T.rate_on(rate_date, "buy")["rate"]
+                sell = T.rate_on(rate_date, "sell")["rate"]
+                return float(buy), float(sell)
+            except Exception:
+                pass
         return None
-    return float(buy), float(sell)
+
+
+def _closing_selling_rate(closing_date):
+    """Return the CBSL USD/LKR selling rate for the tender closing date."""
+    pair = _usd_rate_pair(_report_date(closing_date))
+    return round(pair[1], 4) if pair else None
 
 
 def _populate_exchange_rates(ws, closing_date=None, po_dates=()):
@@ -682,15 +736,10 @@ def _populate_exchange_rates(ws, closing_date=None, po_dates=()):
     parsed = _report_date(po_dates[0]) if po_dates else None
     po_pair = _usd_rate_pair(parsed)
     ws["V4"] = f"PO Date : {parsed.strftime('%d-%m-%Y')}" if parsed else None
-    po_rate = round(sum(po_pair) / 2, 4) if po_pair else None
-    ws["V5"] = po_rate
-    if po_rate is None:
-        ws["W5"] = None
-        ws["X5"] = None
-    else:
-        first_average = round((closing_average + po_rate) / 2, 4) if closing_average is not None else po_rate
-        ws["W5"] = first_average
-        ws["X5"] = round((po_rate + first_average) / 2, 4)
+    # Mirror the tender-closing block: PO-date TT buying, TT selling, and average.
+    ws["V5"] = po_pair[0] if po_pair else None
+    ws["W5"] = po_pair[1] if po_pair else None
+    ws["X5"] = round(sum(po_pair) / 2, 4) if po_pair else None
 
     # Y:AA was a second copy of the same Previous Purchased block. Keep the
     # template columns for compatibility, but never expose or populate them.
@@ -701,6 +750,7 @@ def _populate_exchange_rates(ws, closing_date=None, po_dates=()):
 def _populate_annexure_sheet(ws, entries, tender="", purchasing="", closing_date=None):
     """Populate one Annexure sheet with one company's extracted prices."""
     rows = _annexure_rows(entries)
+    closing_selling_rate = _closing_selling_rate(closing_date)
     first_row, last_template_row = 9, 80
 
     # The template contains a second copy of the Previous Purchased group (Y:AA).
@@ -774,6 +824,13 @@ def _populate_annexure_sheet(ws, entries, tender="", purchasing="", closing_date
         # "Unit Price (With Taxes) (Without SSCL & VAT)" is split into a USD column (O)
         # and an LKR column (P): an LKR quotation must not be written on the USD side.
         price_column = 16 if item["currency"].upper() == "LKR" else 15
+        foreign_lkr = None
+        foreign_sscl = None
+        foreign_vat = None
+        if item["kind"] != "local" and item["currency"].upper() == "USD" and closing_selling_rate is not None:
+            foreign_lkr = round((item["unit_incl"] or item["unit_excl"]) * closing_selling_rate, 2)
+            foreign_sscl = round(foreign_lkr * FOREIGN_SSCL_RATE / 100, 2)
+            foreign_vat = round(foreign_lkr * FOREIGN_VAT_RATE / 100, 2)
         values = {
             1: item["number"],
             2: item["option"],
@@ -794,14 +851,25 @@ def _populate_annexure_sheet(ws, entries, tender="", purchasing="", closing_date
             21: item["unit_incl"],
             28: f"Source: {item['source']} ({item['currency'] or 'currency not stated'})",
         }
-        # Previous Purchased: pull matching awarded foreign lines from tenderdb so the
-        # Annexure's V/W/X and Y/Z/AA columns fill automatically. Only meaningful for
-        # foreign CIF quotations (the comparison is in USD).
-        if item["kind"] != "local" and item["cif"] is not None and T is not None:
+        if foreign_lkr is not None:
+            # Preserve the original USD quote in O and fill the LKR side using
+            # the standard foreign SSCL/VAT rates.
+            values[15] = item["unit_excl"]
+            values[16] = foreign_lkr
+            values[18] = foreign_sscl
+            values[19] = foreign_vat
+            values[20] = round(foreign_lkr + foreign_sscl, 2)
+            values[21] = round(foreign_lkr + foreign_sscl + foreign_vat, 2)
+        # Previous Purchased: pull this bidder's matching prior PO/bid history from
+        # tenderdb into the Annexure's V/W/X columns. Local offers can still
+        # show a prior USD-equivalent purchase, though CIF variation is only
+        # comparable when the current row has a CIF value.
+        if T is not None:
             try:
                 previous = T.previous_purchased(
                     item["description"], item["cif"], limit=1,
                     exclude_tender=tender_no or None,
+                    current_supplier=item["bidder"],
                 )
             except Exception:
                 previous = []
@@ -814,7 +882,8 @@ def _populate_annexure_sheet(ws, entries, tender="", purchasing="", closing_date
                             break
                 values[22] = previous[0]["tender_no"]
                 values[23] = previous[0]["cif_usd"]
-                values[24] = f"=(K{row}-W{row})/W{row}*100"
+                values[24] = (f"=(K{row}-W{row})/W{row}*100"
+                              if item["cif"] is not None else "N/A")
         for column, value in values.items():
             cell = ws.cell(row, column)
             cell.value = _annexure_value(value)
@@ -1144,6 +1213,8 @@ def tender_numbers_from_inputs(inputs):
                 tender = parse_price(path).get("tender")
             except Exception:
                 continue
+            if not tender:
+                tender = C.parse_bid_filename(_original).get("tender_no")
             if tender and tender not in tenders:
                 tenders.append(tender)
     return tenders
@@ -1167,14 +1238,21 @@ def run(inputs, out, closing_date=None, commercial_weight=100):
         if not data["parts"]:
             problems.append(f"{orig.name} ({bname}): no filled-in price schedule found (is Part A / Part B filled in?)")
             continue
+        filename_metadata = C.parse_bid_filename(orig)
         ocr_text = C.ocr_embedded_images(orig) if C.has_official_frank_label(data["text"]) else ""
         bidder = extract_bidder_name(data["text"], data["grids"], bname)
         if bidder == bname and ocr_text:
             bidder = extract_bidder_name(ocr_text, data["grids"], bname)
+        # The explicit Supplier-TenderNo-Type filename is the canonical bidder
+        # label for matching price documents to prior history. It also supplies
+        # the tender number when a schedule omits it from the document body.
+        if filename_metadata["document_type"] and filename_metadata["supplier"]:
+            bidder = filename_metadata["supplier"]
+        tender_no = data["tender"] or filename_metadata["tender_no"]
         for p in data["parts"]:
             entries.append(dict(bidder=bidder, kind=p["kind"], items=p["items"], stated=p["stated"],
                                 currency=detect_currency(data["text"], p["kind"]), source=orig.name,
-                                tender=data["tender"], purchasing=data.get("purchasing", "")))
+                                tender=tender_no, purchasing=data.get("purchasing", "")))
     # Keep the parsed prices in tenderdb so future tenders can show them as Previous Purchases.
     store_price_entries(entries)
     res = dict(file=None, rows=[], problems=problems, notes=[], errors=[],
@@ -1188,22 +1266,36 @@ def run(inputs, out, closing_date=None, commercial_weight=100):
         res["file"] = out / _output_filename(entries)
         overall_tender = ", ".join(res["tenders"]) if res["tenders"] else ""
         overall_purchasing = " / ".join(res["purchasings"]) if res["purchasings"] else ""
+        closing_selling_rate = _closing_selling_rate(closing_date)
         build_workbook(entries, res["file"], tender=overall_tender, purchasing=overall_purchasing,
                        closing_date=closing_date)
         rows = OrderedDict()
         for e in sorted(entries, key=lambda x: (x["bidder"].lower(), x["kind"])):
             total, notes = part_total(e["kind"], e["items"])
             label = "Local" if e["kind"] == "local" else "Foreign"
-            warn = [f"{label}: {n}" for n in notes]
+            # A calculated CIP/CIF unit price is expected behavior for foreign
+            # schedules, not a warning to the user.
+            warn = [
+                f"{label}: {n}" for n in notes
+                if "CIF/CIP unit price calculated" not in n
+            ]
             if e["stated"] is not None and abs(e["stated"] - total) > 0.5:
                 warn.append(f"{label}: calculated total {total:,.2f} differs from the total stated in the document ({e['stated']:,.2f})")
             row = rows.setdefault((e["bidder"], e["currency"]), dict(
                 bidder=e["bidder"], currency=e["currency"], total=0.0, evaluated_total=0.0,
+                evaluated_total_lkr=None, conversion_note=None,
                 commission_total=0.0, commission_review_required=False,
                 unit_price_excl_taxes=None, unit_price_incl_taxes=None,
                 lines=0, status="To be evaluated", source=[], warnings=[]))
             row["total"] += total
             row["evaluated_total"] += evaluated_total(e["kind"], e["items"])
+            if e["kind"] == "foreign" and e["currency"].upper() == "USD":
+                converted_total = _foreign_evaluated_lkr_total(e["items"], closing_selling_rate)
+                if converted_total is not None:
+                    row["evaluated_total_lkr"] = (row["evaluated_total_lkr"] or 0) + converted_total
+                    row["conversion_note"] = (
+                        "Converted to LKR using the CBSL USD selling rate on the tender closing date."
+                    )
             if e["kind"] == "foreign":
                 commission = sum(num(item.get("commission")) or 0 for item in e["items"])
                 row["commission_total"] += commission
@@ -1211,7 +1303,6 @@ def run(inputs, out, closing_date=None, commercial_weight=100):
                     # The printed schedule does not reliably state the currency of this
                     # separate commission column. Do not silently add unlike currencies.
                     row["commission_review_required"] = True
-                    warn.append("Foreign schedule states a separate local-agent commission; confirm its currency and treatment before final price comparison.")
             if e["kind"] == "local":
                 excl = sum(num(item.get("unit_excl")) or 0 for item in e["items"])
                 incl = sum(
@@ -1235,5 +1326,13 @@ def run(inputs, out, closing_date=None, commercial_weight=100):
             res["notes"].append(
                 "One or more foreign schedules state a separate local-agent commission. "
                 "The system has not combined it with the foreign-currency total because its currency is not explicit; confirm and adjust before final ranking/award."
+            )
+        if any(
+            e["kind"] == "foreign" and e.get("currency", "").upper() == "USD"
+            for e in entries
+        ) and closing_selling_rate is None:
+            res["notes"].append(
+                "USD prices could not be converted to LKR because the tender closing date was not available. "
+                "Upload the technical evaluation report with the price schedule."
             )
     return res

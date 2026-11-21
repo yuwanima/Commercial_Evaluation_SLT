@@ -2,6 +2,7 @@
 
 import datetime as dt
 import io
+import time
 import urllib.request
 from functools import lru_cache
 
@@ -75,9 +76,9 @@ def parse_usd(fileobj):
     return data
 
 
-@lru_cache(maxsize=1)
-def _rates():
-    """Download and parse CBSL data once per application process."""
+@lru_cache(maxsize=2)
+def _rates(refresh_hour=None):
+    """Download CBSL data once per hour so later reports see updated rates."""
     return parse_usd(_download())
 
 
@@ -94,7 +95,9 @@ def web_rate(day, kind="buy"):
     if requested is None:
         raise ValueError(f"invalid exchange-rate date: {day!r}")
 
-    rates = _rates()
+    # Rate workbooks are updated by CBSL periodically. A process-lifetime cache
+    # can silently leave every later report on an old workbook; refresh hourly.
+    rates = _rates(int(time.time() // 3600))
     earlier = [available for available in rates if available <= requested]
     if not earlier:
         raise LookupError(f"no CBSL USD rate on or before {requested}")

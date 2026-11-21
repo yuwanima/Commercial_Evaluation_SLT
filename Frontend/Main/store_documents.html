@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Store Document | SLT-MOBITEL</title>
+  <link rel="stylesheet" href="/main.css">
+  <link rel="stylesheet" href="/store-documents.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap header-wrap">
+      <a class="brand-lockup" href="/" aria-label="SLT-MOBITEL home"><img class="slt-logo" src="/main-images/logo.png" alt="SLT-MOBITEL"></a>
+      <nav class="main-nav" aria-label="Main navigation">
+        <a class="nav-link" href="/">Home</a>
+        <a class="nav-link" href="/commercial-evaluation">Evaluation</a>
+      </nav>
+    </div>
+  </header>
+  <main>
+    <div class="wrap store-page">
+      <section class="store-card" aria-labelledby="store-title">
+        <span class="store-kicker">PURCHASE ORDER DOCUMENTS</span>
+        <h1 id="store-title">Store Document</h1>
+        <p class="store-intro">Upload a purchase-order document for analysis. Supplier name and supply description are extracted with the tender number and PO date; the file itself is not saved.</p>
+        <form id="store-form" class="store-form">
+          <label class="drop-zone" for="purchase-files">
+            <span class="drop-icon" aria-hidden="true">↑</span>
+            <strong>Choose documents</strong>
+            <span>PDF, Word, Excel or ZIP files</span>
+            <input id="purchase-files" name="files" type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.xlsm,.zip">
+          </label>
+          <p id="file-summary" class="file-summary">No documents selected.</p>
+          <button class="primary-button" type="submit">Analyze and Store Details</button>
+          <p id="store-status" class="store-status" role="status" aria-live="polite"></p>
+        </form>
+      </section>
+    </div>
+  </main>
+  <script src="/store-documents.js"></script>
+</body>
+</html>

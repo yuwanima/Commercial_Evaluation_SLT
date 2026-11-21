@@ -1,0 +1,20 @@
+body { background: radial-gradient(ellipse at 10% 0, rgba(0,180,235,.075), transparent 27%), #f8fbff; }
+.store-page { min-height: calc(100vh - 150px); display: grid; place-items: center; padding: 20px 0; background: transparent; }
+.store-card { width: min(900px, 100%); padding: 30px 42px; border: 1px solid #dce7f0; border-radius: 20px; background: #fff; box-shadow: 0 14px 32px rgba(7,48,91,.09); }
+.store-kicker { color: #318837; font-size: 11px; font-weight: 800; letter-spacing: .16em; }
+.store-card h1 { margin: 10px 0 8px; color: #07305b; font-size: clamp(30px, 5vw, 44px); letter-spacing: -.04em; }
+.store-intro { margin: 0 0 28px; color: #657b90; line-height: 1.7; }
+.store-intro code { padding: 2px 5px; border-radius: 4px; background: #f1f6fb; color: #0056a2; }
+.store-form { display: grid; gap: 15px; }
+.drop-zone { display: grid; min-height: 135px; place-items: center; align-content: center; gap: 6px; padding: 18px; border: 2px dashed #a9c9e2; border-radius: 14px; background: #f7fbff; color: #657b90; text-align: center; cursor: pointer; }
+.drop-zone:hover, .drop-zone:focus-within { border-color: #00b4eb; background: #effafe; }
+.drop-zone.dragging { border-color: #0072ff; background: #eaf4ff; box-shadow: inset 0 0 0 2px rgba(0,114,255,.08); }
+.drop-zone strong { color: #07305b; font-size: 18px; }
+.drop-icon { display: grid; width: 42px; height: 42px; place-items: center; border-radius: 50%; background: #e2f8fd; color: #008ab5; font-size: 28px; font-weight: 700; }
+.drop-zone input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.file-summary { min-height: 22px; margin: 0; color: #657b90; font-size: 13px; }
+.store-form .primary-button { width: fit-content; border: 0; padding: 12px 20px; border-radius: 10px; background: #0072ff; color: #fff; font: inherit; font-weight: 750; cursor: pointer; }
+.store-form .primary-button:disabled { opacity: .55; cursor: wait; }
+.store-status { min-height: 24px; margin: 0; font-weight: 650; }
+.store-status.ok { color: #318837; }
+.store-status.error { color: #b42318; }
