@@ -1,5 +1,6 @@
 
-import io, re, shutil, sys, tempfile, time, uuid
+import io, re, shutil, sys, tempfile, time, uuid, zipfile
+import datetime as dt
 from pathlib import Path
 import os
 
@@ -56,6 +57,13 @@ OUTPUT_PREFIXES = {
     "price": "Price_Schedules",
     "award": "Award_Recommendation",
 }
+PURCHASE_ORDER_EXTENSIONS = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".xlsm", ".zip"}
+PURCHASE_ORDER_DATE_RE = re.compile(
+    r"\b(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}[/-]\d{1,2}[/-]\d{1,2}|"
+    r"\d{1,2}\s+(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
+    r"Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{4})\b",
+    re.IGNORECASE,
+)
 
 # Uploaded documents are kept in the tenderdb database, not only in the job folder (which
 # is OS temp space and disappears on cleanup/reboot).
@@ -84,13 +92,217 @@ def store_upload(job, mode, bidder, path, original_name, content_type):
                                    content_type=content_type)
 
 
+def _purchase_order_text(filename, content, depth=0):
+    """Extract searchable text without unpacking uploaded archives to disk."""
+    extension = Path(filename).suffix.lower()
+    if extension == ".zip" and depth < 2:
+        parts = []
+        try:
+            with zipfile.ZipFile(io.BytesIO(content)) as archive:
+                for member in archive.infolist():
+                    if member.is_dir() or member.file_size > 25 * 1024 * 1024:
+                        continue
+                    member_name = Path(member.filename).name
+                    if Path(member_name).suffix.lower() in PURCHASE_ORDER_EXTENSIONS:
+                        parts.append(_purchase_order_text(member_name, archive.read(member), depth + 1))
+        except (OSError, zipfile.BadZipFile):
+            return ""
+        return "\n".join(parts)
+    try:
+        if extension == ".pdf":
+            from pypdf import PdfReader
+            reader = PdfReader(io.BytesIO(content), strict=False)
+            text = "\n".join(page.extract_text(extraction_mode="layout") or "" for page in reader.pages)
+            if text.strip():
+                return text
+            # Image-only purchase orders need OCR; keep this optional so text
+            # extraction still works where the local OCR engine is unavailable.
+            try:
+                from pdf2image import convert_from_bytes
+                import pytesseract
+                tesseract = Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe")
+                if tesseract.exists():
+                    pytesseract.pytesseract.tesseract_cmd = str(tesseract)
+                return "\n".join(pytesseract.image_to_string(page) for page in convert_from_bytes(content))
+            except Exception:
+                return ""
+        if extension in (".docx", ".doc"):
+            import docx
+            document = docx.Document(io.BytesIO(content))
+            values = [paragraph.text for paragraph in document.paragraphs]
+            values.extend(" | ".join(cell.text for cell in row.cells) for table in document.tables for row in table.rows)
+            return "\n".join(values)
+        if extension in (".xlsx", ".xlsm"):
+            import openpyxl
+            workbook = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+            try:
+                return "\n".join(
+                    str(cell) for sheet in workbook.worksheets
+                    for row in sheet.iter_rows(values_only=True)
+                    for cell in (" | ".join(str(value) for value in row if value is not None),)
+                    if cell
+                )
+            finally:
+                workbook.close()
+        if extension == ".xls":
+            import xlrd
+            workbook = xlrd.open_workbook(file_contents=content)
+            return "\n".join(
+                " | ".join(str(cell.value) for cell in sheet.row(row) if cell.value not in (None, ""))
+                for sheet in workbook.sheets() for row in range(sheet.nrows)
+            )
+    except Exception:
+        app.logger.exception("Could not extract text from purchase-order document %s", filename)
+    return content.decode("utf-8", errors="ignore") if extension not in (".zip",) else ""
+
+
+def _normalise_purchase_order_date(value):
+    value = re.sub(r"\s+", " ", value.strip())
+    for pattern in ("%d/%m/%Y", "%d-%m-%Y", "%d/%m/%y", "%d-%m-%y", "%Y-%m-%d",
+                    "%d %B %Y", "%d %b %Y"):
+        try:
+            return dt.datetime.strptime(value, pattern).date().isoformat()
+        except ValueError:
+            continue
+    return value
+
+
+def analyse_purchase_order(filename, content):
+    """Extract purchase-order metadata, including supplier and supply description."""
+    # Preserve PDF layout spacing: in purchase-order tables, columns are often
+    # represented by whitespace rather than punctuation or actual table cells.
+    text = _purchase_order_text(filename, content)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+
+    tender_no = ""
+    # Require an explicit number/reference label so headings such as
+    # "Tender for Purchase" are never mistaken for a tender number.
+    tender_match = re.search(
+        r"(?im)\b(?:tender|rfq|bid)\s*(?:no\.?|number|ref(?:erence)?|id)\s*"
+        r"(?:[:#.\-–—]|\s)*"
+        r"([A-Za-z0-9][A-Za-z0-9./_-]{2,})", text,
+    )
+    if tender_match:
+        tender_no = tender_match.group(1).strip(".,;:")
+
+    bidder_name = ""
+    bidder_label = (
+        r"(?:awarded\s+(?:company|supplier|bidder|tenderer)"
+        r"(?:\s*/\s*(?:company|supplier|bidder|tenderer))*\s*(?:name)?|"
+        r"successful\s+(?:bidder|supplier|tenderer)|"
+        r"awarded\s+to|"
+        r"(?:company|bidder|supplier|vendor)(?:\s*/\s*(?:company|bidder|supplier|vendor))+\s*(?:name)?|"
+        r"(?:bidder|tenderer|supplier|vendor|company|contractor)\s*(?:name)?|"
+        r"name\s+of\s+(?:the\s+)?(?:bidder|tenderer|supplier|vendor|company))"
+    )
+    bidder_match = re.search(
+        rf"(?im)^\s*{bidder_label}\s*(?:[:#.\-–—]+\s*(.*\S)|\s*)$", text
+    )
+    if bidder_match and bidder_match.group(1):
+        bidder_name = bidder_match.group(1).strip(" .,:;-–—")
+    elif bidder_match:
+        label_index = next((i for i, line in enumerate(lines) if re.fullmatch(
+            rf"\s*{bidder_label}\s*", line, re.IGNORECASE)), -1)
+        if label_index >= 0:
+            for candidate in lines[label_index + 1:label_index + 3]:
+                candidate = candidate.strip(" .,:;-–—")
+                if candidate and not re.search(r"(?i)^(?:name|address|date|no\.?|number)$", candidate):
+                    bidder_name = candidate
+                    break
+
+    # Award-specific labels take precedence over an earlier generic supplier
+    # field, because purchase-order forms often contain both.
+    award_label = r"(?:awarded\s+(?:company|supplier|bidder|tenderer)(?:\s*/\s*(?:company|supplier|bidder|tenderer))*\s*(?:name)?|successful\s+(?:bidder|supplier|tenderer)|awarded\s+to)"
+    award_match = re.search(rf"(?im)^\s*{award_label}\s*[:#.-]+\s*(.+?\S)\s*$", text)
+    if not award_match:
+        award_match = re.search(rf"(?im)^\s*{award_label}\s*$\n\s*(.+?\S)\s*$", text)
+    if award_match:
+        bidder_name = award_match.group(1).strip(" .,:;-")
+
+    # Supplier Details can occur anywhere in the form and may span multiple lines.
+    supplier_section = re.search(
+        r"(?is)\b(?:supplier\s+details|supplier\s+information|vendor\s+details)\b\s*[:\-]?"
+        r"(.*?)(?=\b(?:delivery\s+details|billing\s+details|payment\s+terms|order\s+details|"
+        r"goods\s*/\s*services\s+details|description\s+of\s+(?:goods|services|supply))\b|\Z)", text,
+    )
+    supplier_text = supplier_section.group(1) if supplier_section else text
+
+    def labelled_value(source, labels):
+        label_pattern = "|".join(labels)
+        for line_index, line in enumerate(source.splitlines()):
+            # Works with conventional "Label: value", DOCX/XLSX row separators,
+            # and PDF layout output where separate columns are spaced apart.
+            match = re.match(
+                rf"^\s*(?:{label_pattern})\s*(?::|#|=|\||\s{{2,}})\s*(.*?)\s*$",
+                line, re.IGNORECASE,
+            )
+            value = match.group(1).strip(" .,:;-|") if match else ""
+            if value:
+                return value
+            if match:
+                for candidate_line in source.splitlines()[line_index + 1:line_index + 3]:
+                    candidate = candidate_line.strip(" .,:;-|")
+                    if candidate and not re.match(
+                        r"(?i)^(?:address|telephone|phone|email|contact|name|field|supplier information)$",
+                        candidate,
+                    ):
+                        return candidate
+        return ""
+
+    supplier_name = labelled_value(supplier_text, [
+        r"awarded\s+supplier\s*/\s*company", r"awarded\s+supplier", r"awarded\s+company",
+        r"name\s+of\s+(?:the\s+)?supplier", r"supplier\s*(?:/\s*company)?\s*name",
+        r"supplier\s+company", r"company\s*name", r"supplier", r"vendor\s*name"
+    ])
+    if not supplier_name:
+        supplier_name = labelled_value(text, [r"name\s+of\s+(?:the\s+)?supplier",
+                                              r"supplier\s*(?:/\s*company)?\s*name", r"vendor\s*name"])
+    supply_description = labelled_value(text, [
+        r"description\s+of\s+(?:goods|services|supply)(?:\s+to\s+be\s+supplied)?",
+        r"goods\s*/\s*services\s*(?:description)?",
+        r"scope\s+of\s+supply", r"item\s+description", r"supply\s+description", r"particulars"
+    ])
+    if not supply_description:
+        item_section = re.search(
+            r"(?is)\bordered\s+items\s*/\s*services\b(.*?)(?=\bfinancial\s+summary\b|\Z)", text
+        )
+        if item_section:
+            descriptions = []
+            for line in item_section.group(1).splitlines():
+                cells = [cell.strip() for cell in re.split(r"\s{2,}|\s*\|\s*", line.strip()) if cell.strip()]
+                if len(cells) >= 2 and re.fullmatch(r"\d+[.)]?", cells[0]):
+                    description = cells[1].strip(" .,:;-|")
+                    if description and not re.match(r"(?i)^description(?:\s*/.*)?$", description):
+                        descriptions.append(description)
+            supply_description = "; ".join(descriptions)
+
+    po_date = ""
+    po_date_match = re.search(
+        rf"(?im)\b(?:purchase\s*order|po)\s*date\s*[:#-]?\s*({PURCHASE_ORDER_DATE_RE.pattern})",
+        text,
+    )
+    if po_date_match:
+        po_date = _normalise_purchase_order_date(po_date_match.group(1))
+    else:
+        for line in lines:
+            if re.search(r"(?i)\b(?:purchase\s*order|po)\b", line):
+                date_match = PURCHASE_ORDER_DATE_RE.search(line)
+                if date_match:
+                    po_date = _normalise_purchase_order_date(date_match.group(0))
+                    break
+
+    return {"tender_no": tender_no or None, "bidder_name": bidder_name or supplier_name or None,
+            "supplier_name": supplier_name or None,
+            "supply_description": supply_description or None, "po_date": po_date or None}
+
+
 def technical_closing_date(evals):
     """Get the tender closing date extracted from a technical evaluation report."""
     for evaluation in evals or []:
         for key, value in (evaluation.get("meta") or {}).items():
             key_text = str(key).casefold()
             if ("closing" in key_text or "closed" in key_text) and "date" in key_text and value:
-                return value
+                return _normalise_purchase_order_date(str(value))
     return None
 
 # Excel summaries kept in the excel_file table (View Evaluation). Order = display order.
@@ -228,6 +440,53 @@ def store_documents_script():
     return send_from_directory(MAIN_FRONTEND_DIR, "store-documents.js")
 
 
+@app.get("/api/purchase-orders")
+def stored_purchase_orders():
+    if not database_ready():
+        return jsonify(error="The tender database could not be reached."), 503
+    return jsonify(documents=tender_data.purchase_orders())
+
+
+@app.post("/api/purchase-orders")
+def upload_purchase_orders():
+    if not database_ready():
+        return jsonify(error="The tender database could not be reached."), 503
+    uploaded = request.files.getlist("files")
+    if not uploaded:
+        return jsonify(error="Please select at least one purchase-order document."), 400
+
+    saved, saved_documents, rejected = [], [], []
+    for document in uploaded:
+        original_name = Path(document.filename or "").name
+        extension = Path(original_name).suffix.lower()
+        if not original_name or extension not in PURCHASE_ORDER_EXTENSIONS:
+            rejected.append(original_name or "unnamed file")
+            continue
+        content = document.read()
+        if not content:
+            rejected.append(f"{original_name} (empty file)")
+            continue
+        try:
+            metadata = analyse_purchase_order(original_name, content)
+            tender_data.store_purchase_order(
+                tender_no=metadata["tender_no"],
+                bidder_name=metadata["bidder_name"],
+                supplier_name=metadata["supplier_name"],
+                supply_description=metadata["supply_description"],
+                po_date=metadata["po_date"],
+            )
+            saved.append(original_name)
+            saved_documents.append(metadata)
+        except Exception:
+            app.logger.exception("Could not store purchase-order document %s", original_name)
+            return jsonify(error=f"Could not store extracted metadata from {original_name} in the purchase_order table."), 503
+
+    if not saved:
+        return jsonify(error="No supported purchase-order documents were uploaded.", rejected=rejected), 422
+    return jsonify(saved=saved, documents=saved_documents, rejected=rejected,
+                   message="Purchase-order documents analyzed; extracted metadata was stored.")
+
+
 def extract_approval_scores(pdf_bytes):
     """Read the tender number and the two approved weighting percentages from a PDF."""
     from pypdf import PdfReader
@@ -351,19 +610,23 @@ def process():
         if ext == ".pdf":
             try:
                 approval_tender, technical_weight, commercial_weight = extract_approval_scores(path.read_bytes())
-            except ValueError:
-                pass
+            except ValueError as exc:
+                if re.search(r"approval|criteria|strategy", original_name, re.I):
+                    store_problems.append(f"{original_name}: approval criteria could not be extracted ({exc})")
             except Exception:
                 app.logger.exception("Could not inspect uploaded PDF for approval weightings")
             else:
-                approval_documents.append({"tender_no": approval_tender,
-                                           "technical_weighting": technical_weight,
-                                           "commercial_weighting": commercial_weight})
+                approval_document = {"tender_no": approval_tender,
+                                     "technical_weighting": technical_weight,
+                                     "commercial_weighting": commercial_weight,
+                                     "saved": False}
+                approval_documents.append(approval_document)
                 approval_weights[approval_tender] = {"technical": technical_weight,
                                                      "commercial": commercial_weight}
                 if store:
                     try:
                         tender_data.store_scores(approval_tender, technical_weight, commercial_weight)
+                        approval_document["saved"] = True
                     except Exception as exc:
                         store_problems.append(f"{original_name}: approval weightings could not be stored ({exc})")
                 # Approval criteria PDFs are metadata inputs, not evaluation reports or price schedules.
@@ -508,10 +771,43 @@ def process():
             evaluations=res.get("evals", []), price_rows=price_res.get("rows", []),
             weights=(approval_weights.get(tender_hints[0]) if len(tender_hints) == 1 else None),
         )
+        ranked_history_problems = []
+        if award_assessment and len(tender_numbers) == 1 and store:
+            tender_no_for_history = tender_numbers[0]
+            closing_date = technical_closing_date(res.get("evals"))
+            if closing_date:
+                try:
+                    tender_data.set_tender(tender_no_for_history, closing_date=closing_date)
+                except Exception as exc:
+                    ranked_history_problems.append(
+                        f"{tender_no_for_history}: tender closing date could not be stored ({exc})"
+                    )
+            leaders = []
+            if award_assessment.get("decision") == "recommendation_ready":
+                leaders = sorted(
+                    (bidder for bidder in award_assessment.get("bidders", [])
+                     if bidder.get("eligibility_status") == "eligible" and bidder.get("overall_score") is not None),
+                    key=lambda bidder: (-float(bidder["overall_score"]),
+                                        award_recommender.bidder_key(bidder.get("bidder"))),
+                )[:3]
+            try:
+                _stored_count, history_warnings = tender_data.store_ranked_bidder_history(
+                    tender_no_for_history, leaders, closing_date=closing_date,
+                )
+                ranked_history_problems.extend(history_warnings)
+            except Exception as exc:
+                app.logger.exception("Could not store ranked bidder history for %s", tender_no_for_history)
+                ranked_history_problems.append(
+                    f"{tender_no_for_history}: ranked bidders could not be saved to past_award ({exc})"
+                )
+        elif award_assessment and len(tender_numbers) == 1:
+            ranked_history_problems.append(
+                "Top-ranked bidder details were not saved because the tender database is unavailable."
+            )
         problems = [
             problem for problem in res["problems"] + price_res["problems"]
             if not is_cross_parser_warning(problem)
-        ] + price_res["errors"] + extra_problems + score_problems
+        ] + price_res["errors"] + extra_problems + score_problems + ranked_history_problems
         if not (res["gcc"] or res["gct"] or res["scc"] or res["evals"] or price_res["file"]):
             return jsonify(error="None of the uploaded documents could be read.", problems=problems), 422
         tender_no, saved, save_problems = save_excel_outputs(
@@ -521,6 +817,7 @@ def process():
             scc=bool(res["scc"]),
             eval=bool(res["evals"]), evals=res["evals"], price=bool(price_res["file"]),
             rows=price_res["rows"], notes=price_res["notes"],
+            approval_criteria=approval_documents,
             award=bool(award_path and award_path.exists()), award_assessment=award_assessment,
             gcc_bidders=res["gcc_bidders"], gct_bidders=res["gct_bidders"], scc_bidders=res["scc_bidders"],
             document_summaries=res["document_summaries"], problems=problems + save_problems,

@@ -48,13 +48,20 @@ CREATE TABLE IF NOT EXISTS past_award(
     id            %s,
     tender_no     TEXT NOT NULL,
     item          TEXT NOT NULL,
+    description   TEXT,
     supplier      TEXT,
-    cif_usd       NUMERIC(14,4) NOT NULL CHECK (cif_usd > 0),
+    cif_usd       NUMERIC(14,4),
     closing_date  DATE,
     po_date       DATE,
+    amount        NUMERIC(18,4),
+    bidder_total  NUMERIC(18,4),
+    unit_price    NUMERIC(16,4),
+    currency      TEXT,
+    rank_position INTEGER,
+    overall_score NUMERIC(7,2),
+    record_type   TEXT NOT NULL DEFAULT 'historical_award',
     entered_by    TEXT,
-    entered_at    TEXT NOT NULL,
-    UNIQUE (tender_no, item)
+    entered_at    TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS tender(
     tender_no       TEXT PRIMARY KEY,
@@ -86,6 +93,7 @@ CREATE TABLE IF NOT EXISTS bid_line(
     qty          NUMERIC(14,4),
     currency     TEXT,
     unit_price   NUMERIC(16,4),
+    unit_price_excl_tax NUMERIC(16,4),
     line_total   NUMERIC(18,4),
     origin       TEXT,
     source_file  TEXT,
@@ -125,6 +133,17 @@ CREATE TABLE IF NOT EXISTS excel_file(
 CREATE INDEX IF NOT EXISTS ix_excel_file_tender ON excel_file(tender_no);
 """
 
+PURCHASE_ORDER_SCHEMA = f"""
+CREATE TABLE IF NOT EXISTS purchase_order(
+    id           {"SERIAL PRIMARY KEY" if PG else "INTEGER PRIMARY KEY AUTOINCREMENT"},
+    tender_no    TEXT,
+    bidder_name  TEXT,
+    supplier_name TEXT,
+    supply_description TEXT,
+    po_date      DATE
+);
+"""
+
 
 from contextlib import contextmanager
 
@@ -145,20 +164,107 @@ def session():
 
 def init():
     with session() as cur:
-        for stmt in (SCHEMA + EXCEL_SCHEMA).split(";"):
+        for stmt in (SCHEMA + EXCEL_SCHEMA + PURCHASE_ORDER_SCHEMA).split(";"):
             if stmt.strip():
                 cur.execute(stmt)
         _ensure_scores_schema(cur)
+        _ensure_past_award_schema(cur)
+        _ensure_bid_line_schema(cur)
         # Add content_hash to older uploaded_document tables (created before dedup).
-        try:
+        if "content_hash" not in _table_columns(cur, "uploaded_document"):
             cur.execute("ALTER TABLE uploaded_document ADD COLUMN content_hash TEXT")
-        except Exception:
-            pass
+        cur.execute("SAVEPOINT uploaded_document_index")
         try:
             cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_uploaded_document_file_hash "
                         "ON uploaded_document(filename, content_hash)")
         except Exception:
-            pass
+            # Existing legacy rows may contain duplicate hashes. The database must
+            # still remain usable; roll back only this optional index operation.
+            cur.execute("ROLLBACK TO SAVEPOINT uploaded_document_index")
+        finally:
+            cur.execute("RELEASE SAVEPOINT uploaded_document_index")
+        _ensure_purchase_order_schema(cur)
+
+
+def _ensure_past_award_schema(cur):
+    """Upgrade old one-award-per-item history to ranked, line-level bid records."""
+    columns = _table_columns(cur, "past_award")
+    required = {
+        "id", "tender_no", "item", "description", "supplier", "cif_usd", "closing_date",
+        "po_date", "amount", "bidder_total", "unit_price", "currency", "rank_position",
+        "overall_score", "record_type", "entered_by", "entered_at",
+    }
+    if columns >= required:
+        return
+
+    legacy_columns = columns
+    cur.execute("ALTER TABLE past_award RENAME TO past_award_legacy")
+    id_type = "SERIAL PRIMARY KEY" if PG else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    cur.execute(f"""CREATE TABLE past_award(
+        id {id_type}, tender_no TEXT NOT NULL, item TEXT NOT NULL, description TEXT,
+        supplier TEXT, cif_usd NUMERIC(14,4), closing_date DATE, po_date DATE,
+        amount NUMERIC(18,4), bidder_total NUMERIC(18,4), unit_price NUMERIC(16,4),
+        currency TEXT, rank_position INTEGER, overall_score NUMERIC(7,2),
+        record_type TEXT NOT NULL DEFAULT 'historical_award', entered_by TEXT, entered_at TEXT NOT NULL
+    )""")
+    copy_columns = [name for name in (
+        "id", "tender_no", "item", "supplier", "cif_usd", "closing_date", "po_date", "entered_by", "entered_at"
+    ) if name in legacy_columns]
+    if copy_columns:
+        names = ",".join(copy_columns)
+        cur.execute(f"INSERT INTO past_award({names}) SELECT {names} FROM past_award_legacy")
+    cur.execute("DROP TABLE past_award_legacy")
+    if PG:
+        cur.execute("SELECT MAX(id) FROM past_award")
+        highest_id = cur.fetchone()[0]
+        if highest_id is not None:
+            cur.execute("SELECT setval(pg_get_serial_sequence('past_award','id'), %s, true)", (highest_id,))
+
+
+def _table_columns(cur, table_name):
+    if PG:
+        cur.execute("SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = current_schema() AND table_name=%s", (table_name,))
+        return {row[0] for row in cur.fetchall()}
+    cur.execute(f"PRAGMA table_info({table_name})")
+    return {row[1] for row in cur.fetchall()}
+
+
+def _ensure_bid_line_schema(cur):
+    """Keep the quoted base unit price separate from tax-inclusive price totals."""
+    if "unit_price_excl_tax" not in _table_columns(cur, "bid_line"):
+        cur.execute("ALTER TABLE bid_line ADD COLUMN unit_price_excl_tax NUMERIC(16,4)")
+
+
+def _purchase_order_columns(cur):
+    return _table_columns(cur, "purchase_order")
+
+
+def _ensure_purchase_order_schema(cur):
+    """Remove legacy uploaded-file fields while retaining extracted PO metadata."""
+    columns = _purchase_order_columns(cur)
+    expected = {"id", "tender_no", "bidder_name", "supplier_name", "supply_description", "po_date"}
+    if columns and not columns <= expected:
+        legacy_table = "purchase_order_legacy"
+        cur.execute(f"DROP TABLE IF EXISTS {legacy_table}")
+        cur.execute("ALTER TABLE purchase_order RENAME TO purchase_order_legacy")
+        cur.execute(PURCHASE_ORDER_SCHEMA.split(";")[0])
+        cur.execute("INSERT INTO purchase_order(tender_no,bidder_name,po_date) "
+                    "SELECT tender_no,bidder_name,po_date FROM purchase_order_legacy")
+        cur.execute(f"DROP TABLE {legacy_table}")
+        columns = _purchase_order_columns(cur)
+    if not columns:
+        return
+    missing_columns = {
+        "tender_no": "TEXT",
+        "bidder_name": "TEXT",
+        "supplier_name": "TEXT",
+        "supply_description": "TEXT",
+        "po_date": "DATE",
+    }
+    for column, sql_type in missing_columns.items():
+        if column not in columns:
+            cur.execute(f"ALTER TABLE purchase_order ADD COLUMN {column} {sql_type}")
 
 
 def _score_columns(cur):
@@ -239,7 +345,16 @@ def save_rates(rows, source):
 def rate_on(day, kind="buy"):
     """Rate on `day`. If none was published that day (weekend/holiday) the last earlier one is used and
     exact=False is returned, so the report can say so."""
-    assert kind in ("buy", "sell", "indicative")
+    assert kind in ("buy", "sell", "indicative", "average")
+    if kind == "average":
+        with session() as cur:
+            cur.execute(f"SELECT day,buy,sell FROM usd_rate WHERE day<={PH} "
+                        "AND buy IS NOT NULL AND sell IS NOT NULL ORDER BY day DESC LIMIT 1", (str(day),))
+            r = cur.fetchone()
+        if not r:
+            raise LookupError(f"no USD average rate stored on or before {day}")
+        return {"requested": str(day), "rate_date": str(r[0]),
+                "rate": (float(r[1]) + float(r[2])) / 2, "exact": str(r[0]) == str(day)}
     with session() as cur:
         cur.execute(f"SELECT day,{kind} FROM usd_rate WHERE day<={PH} AND {kind} IS NOT NULL "
                     "ORDER BY day DESC LIMIT 1", (str(day),))
@@ -251,9 +366,9 @@ def rate_on(day, kind="buy"):
 
 def add_past_award(tender_no, item, cif_usd, supplier=None, closing_date=None, po_date=None, user=None):
     with session() as cur:
-        cur.execute(f"INSERT INTO past_award(tender_no,item,supplier,cif_usd,closing_date,po_date,entered_by,entered_at) "
-                    f"VALUES({','.join([PH]*8)})",
-                    (tender_no, item, supplier, cif_usd, closing_date, po_date, user, _now()))
+        cur.execute(f"INSERT INTO past_award(tender_no,item,description,supplier,cif_usd,closing_date,po_date,entered_by,entered_at) "
+                    f"VALUES({','.join([PH]*9)})",
+                    (tender_no, item, item, supplier, cif_usd, closing_date, po_date, user, _now()))
 
 
 def _norm(t):
@@ -272,7 +387,7 @@ def _bidder_key(value):
     import re
     words = re.findall(r"[a-z0-9]+", str(value or "").casefold().replace("&", " and "))
     document_suffixes = {
-        ("price", "document"), ("price", "schedule"), ("price", "doc"),
+        ("price", "document"), ("price", "documents"), ("price", "schedule"), ("price", "doc"),
         ("commercial", "document"), ("commercial", "evaluation"),
         ("gcc", "form"), ("scc", "form"), ("gct", "form"), ("form",),
     }
@@ -310,6 +425,72 @@ def set_tender(tender_no, closing_date=None, po_date=None, awarded_company=None)
                     "po_date=COALESCE(excluded.po_date,tender.po_date), "
                     "awarded_company=COALESCE(excluded.awarded_company,tender.awarded_company)",
                     (tender_no, closing_date, po_date, awarded_company))
+
+
+def store_ranked_bidder_history(tender_no, ranked_bidders, closing_date=None, user=None):
+    """Replace ranked-candidate history with up to three composite-score leaders.
+
+    A bidder can have several line items, so each parsed bid line is retained with
+    its own description, amount, and unit price while repeating the bidder total
+    and composite rank. These rows are recommendations, not confirmed awards.
+    """
+    candidates = [bidder for bidder in (ranked_bidders or [])
+                  if bidder.get("overall_score") is not None and bidder.get("bidder")][:3]
+    if not tender_no:
+        return 0, ["Ranked bid details were not stored because the tender number is missing."]
+
+    warnings = []
+    with session() as cur:
+        if closing_date:
+            cur.execute(f"UPDATE tender SET closing_date=COALESCE({PH},closing_date) WHERE tender_no={PH}",
+                        (closing_date, tender_no))
+        cur.execute(f"SELECT company,description,qty,currency,unit_price,line_total,unit_price_excl_tax "
+                    f"FROM bid_line WHERE tender_no={PH}",
+                    (tender_no,))
+        line_rows = cur.fetchall()
+        lines_by_bidder = {}
+        for line in line_rows:
+            lines_by_bidder.setdefault(_bidder_key(line[0]), []).append(line)
+
+        cur.execute(f"DELETE FROM past_award WHERE tender_no={PH} AND record_type='ranked_candidate'", (tender_no,))
+        inserted = 0
+        for position, bidder in enumerate(candidates, 1):
+            supplier = str(bidder["bidder"]).strip()
+            key = _bidder_key(supplier)
+            price = bidder.get("price") or {}
+            bidder_total = price.get("amount")
+            currency = price.get("currency")
+            score = bidder.get("overall_score")
+            rank_position = bidder.get("overall_rank") or position
+            bidder_lines = lines_by_bidder.get(key, [])
+            if not bidder_lines:
+                warnings.append(f"{supplier}: no parsed price lines were available to store with the ranking.")
+                continue
+            for line in bidder_lines:
+                _company, description, qty, line_currency, unit_price, line_total, unit_price_excl_tax = line
+                amount = line_total
+                if amount is None and unit_price is not None:
+                    amount = unit_price * (qty if qty is not None else 1)
+                if not description and amount is None and unit_price is None:
+                    continue
+                item = str(description or "Unspecified bid item").strip()
+                line_currency = line_currency or currency
+                cif_usd = (unit_price_excl_tax if str(line_currency or "").upper() == "USD"
+                           else None)
+                cur.execute(
+                    f"INSERT INTO past_award(tender_no,item,description,supplier,cif_usd,closing_date,"
+                    f"amount,bidder_total,unit_price,currency,rank_position,overall_score,record_type,entered_by,entered_at) "
+                    f"VALUES({','.join([PH] * 15)})",
+                    (tender_no, item, item, supplier, cif_usd, closing_date, amount, bidder_total,
+                     unit_price_excl_tax,
+                     line_currency, rank_position, score, "ranked_candidate", user, _now()),
+                )
+                inserted += 1
+    if not candidates:
+        warnings.append("No complete approved overall rankings were available; ranked candidate rows were cleared.")
+    elif len(candidates) < 3:
+        warnings.append(f"Only {len(candidates)} bidder(s) had complete overall scores; stored available ranked bidders.")
+    return inserted, warnings
 
 
 def store_scores(tender_no, technical_weighting, commercial_weighting):
@@ -454,9 +635,10 @@ def store_bid_lines(tender_no, company, supply_type, currency, lines, source_fil
     tender/company/part replaces its lines (no duplicates, no leftover lines from a previous upload)."""
     now = _now()
     sql = ("INSERT INTO bid_line(tender_no,company,supply_type,line_no,description,qty,currency,unit_price,"
-           "line_total,origin,source_file,uploaded_by,uploaded_at) VALUES(" + ",".join([PH] * 13) + ") "
+           "unit_price_excl_tax,line_total,origin,source_file,uploaded_by,uploaded_at) VALUES(" + ",".join([PH] * 14) + ") "
            "ON CONFLICT(tender_no,company,supply_type,line_no) DO UPDATE SET description=excluded.description,"
            "qty=excluded.qty,currency=excluded.currency,unit_price=excluded.unit_price,line_total=excluded.line_total,"
+           "unit_price_excl_tax=excluded.unit_price_excl_tax,"
            "origin=excluded.origin,source_file=excluded.source_file,uploaded_by=excluded.uploaded_by,"
            "uploaded_at=excluded.uploaded_at")
     with session() as cur:
@@ -466,7 +648,8 @@ def store_bid_lines(tender_no, company, supply_type, currency, lines, source_fil
                     (tender_no, company, supply_type))
         for n, l in enumerate(lines, 1):
             cur.execute(sql, (tender_no, company, supply_type, n, l.get("description"), l.get("qty"), currency,
-                              l.get("unit_price"), l.get("line_total"), l.get("origin"), source_file, user, now))
+                              l.get("unit_price"), l.get("unit_price_excl_tax"), l.get("line_total"),
+                              l.get("origin"), source_file, user, now))
     return len(lines)
 
 
@@ -493,6 +676,31 @@ def store_document(job, filename, content, mode=None, bidder=None, content_type=
     return len(content)
 
 
+def store_purchase_order(tender_no=None, bidder_name=None, supplier_name=None, supply_description=None, po_date=None):
+    """Store only extracted purchase-order metadata; uploaded bytes are never persisted."""
+    with session() as cur:
+        cur.execute(
+            f"INSERT INTO purchase_order(tender_no,bidder_name,supplier_name,supply_description,po_date) VALUES({','.join([PH] * 5)})",
+            (tender_no, bidder_name, supplier_name, supply_description, po_date),
+        )
+    return 1
+
+
+def purchase_orders(limit=100):
+    """Return extracted purchase-order metadata, newest first."""
+    with session() as cur:
+        cur.execute(
+            f"SELECT id,tender_no,bidder_name,supplier_name,supply_description,po_date "
+            f"FROM purchase_order ORDER BY id DESC LIMIT {PH}",
+            (int(limit),),
+        )
+        return [
+            dict(id=r[0], tender_no=r[1], bidder_name=r[2], supplier_name=r[3],
+                 supply_description=r[4], po_date=str(r[5]) if r[5] else None)
+            for r in cur.fetchall()
+        ]
+
+
 def documents_for(job):
     """Stored documents of a job, oldest first. Content is left out; use document_content() for it."""
     with session() as cur:
@@ -513,23 +721,203 @@ def document_content(document_id):
     return row[0], row[1], bytes(row[2])
 
 
-def previous_purchased(item, current_cif_usd, limit=3, exclude_tender=None):
+def previous_purchased(item, current_cif_usd, limit=3, exclude_tender=None,
+                       current_supplier=None):
     """Rows for the 'Previous Purchased' block: Tender No | Price (CIF)(USD) | % of Variation (CIF).
-    Sources: (1) awarded foreign bid lines stored from uploaded price documents, (2) manually entered
-    past awards. Items are matched on the description (ignoring case/punctuation) - exact match only."""
+    Match the current bidder to its prior purchase orders, then use that supplier's saved bid price.
+    Legacy manual CIF entries and confirmed awarded foreign bid lines remain supported."""
     want = _norm(item)
+    if not want:
+        return []
+    current_supplier_key = _bidder_key(current_supplier) if current_supplier else None
     found = []
+    po_date_rates = {}
+
+    def prior_price_usd(price, currency, po_date):
+        if price is None:
+            return None
+        currency = str(currency or "").strip().upper()
+        if currency == "USD":
+            return float(price)
+        if currency in {"LKR", "RS", "RS."} and po_date:
+            day = str(po_date)
+            if day not in po_date_rates:
+                # Prefer the same official CBSL historical rate used in the
+                # price workbook. A local-currency purchase is converted at
+                # the TT selling rate required to buy USD. Use persisted rates
+                # only when the official workbook cannot be reached.
+                try:
+                    from ..Price_Doc.cbsl_web_rate import web_rate
+                except ImportError:
+                    try:
+                        from Price_Doc.cbsl_web_rate import web_rate
+                    except ImportError:
+                        from Backend.Price_Doc.cbsl_web_rate import web_rate
+                try:
+                        po_date_rates[day] = web_rate(day, "sell")["rate"]
+                except Exception:
+                    try:
+                        po_date_rates[day] = rate_on(day, "sell")["rate"]
+                    except (LookupError, ValueError):
+                        po_date_rates[day] = None
+            rate = po_date_rates[day]
+            return round(float(price) / rate, 4) if rate else None
+        return None
+
     with session() as cur:
-        cur.execute("SELECT b.tender_no, b.description, b.unit_price, t.po_date FROM bid_line b "
+        cur.execute("SELECT tender_no,bidder_name,supplier_name,supply_description,po_date "
+                    "FROM purchase_order WHERE tender_no IS NOT NULL")
+        orders = cur.fetchall()
+        cur.execute("SELECT tender_no,item,description,supplier,cif_usd,unit_price,currency,"
+                    "po_date,record_type "
+                    "FROM past_award WHERE supplier IS NOT NULL")
+        awards = cur.fetchall()
+        cur.execute("SELECT tender_no,company,description,currency,unit_price FROM bid_line "
+                    "WHERE unit_price IS NOT NULL")
+        bid_lines = cur.fetchall()
+        po_dates_by_tender = {}
+        for order_tender, _bidder, _supplier, order_description, order_date in orders:
+            if (order_tender and order_tender != exclude_tender and order_date
+                    and (not order_description or _history_description_matches(item, order_description))):
+                previous_date = po_dates_by_tender.get(order_tender)
+                if previous_date is None or str(order_date) > str(previous_date):
+                    po_dates_by_tender[order_tender] = order_date
+
+        # A purchase order confirms which bidder was actually purchased from.
+        # Use that supplier to select a matching line in past_award, or the
+        # original foreign price schedule if no award price was saved.
+        for order_tender, bidder_name, supplier_name, supply_description, order_date in orders:
+            if not order_tender or order_tender == exclude_tender:
+                continue
+            supplier_keys = {_bidder_key(value) for value in (bidder_name, supplier_name) if value}
+            if not supplier_keys:
+                continue
+            # Each generated Annexure belongs to one current bidder. Do not show
+            # another bidder's historical PO just because it was for the same item.
+            if current_supplier_key and current_supplier_key not in supplier_keys:
+                continue
+            if not _history_description_matches(item, supply_description):
+                # The purchase-order description can be broad; a detailed
+                # matching award/bid line below may still identify this item.
+                order_description_matches = False
+            else:
+                order_description_matches = True
+
+            matched_price = None
+            matched_date = order_date
+            for award in awards:
+                (award_tender, award_item, award_description, award_supplier, cif_usd,
+                 unit_price, currency, award_po_date, _record_type) = award
+                if award_tender != order_tender or _bidder_key(award_supplier) not in supplier_keys:
+                    continue
+                award_item_matches = _history_description_matches(item, award_item, award_description)
+                if not award_item_matches and not (
+                        order_description_matches and not (award_item or award_description)):
+                    continue
+                matched_price = prior_price_usd(unit_price, currency, order_date)
+                if matched_price is None and cif_usd is not None:
+                    matched_price = float(cif_usd)
+                if matched_price is not None:
+                    matched_date = matched_date or award_po_date
+                    break
+
+            if matched_price is None:
+                for bid_tender, company, description, currency, unit_price in bid_lines:
+                    if (bid_tender == order_tender and _bidder_key(company) in supplier_keys
+                            and str(currency or "").upper() == "USD"
+                            and _history_description_matches(item, description)):
+                        matched_price = float(unit_price)
+                        break
+            if matched_price is not None:
+                found.append((order_tender, matched_price, matched_date, "purchase order"))
+
+        # Ranked bid history can supply a prior quote for a repeat bidder even
+        # when the current PO did not preserve that bidder's detailed line.
+        # Keep the real PO date separately; a closing date is not a PO date.
+        supplier_po_dates = {}
+        if current_supplier_key:
+            for order_tender, bidder_name, supplier_name, _description, order_date in orders:
+                supplier_keys = {_bidder_key(value) for value in (bidder_name, supplier_name) if value}
+                if current_supplier_key in supplier_keys and order_date:
+                    previous_date = supplier_po_dates.get(order_tender)
+                    if previous_date is None or str(order_date) > str(previous_date):
+                        supplier_po_dates[order_tender] = order_date
+
+        # Ranked candidate rows preserve a supplier's prior submitted price even
+        # when that supplier did not win the earlier purchase order. Use these
+        # only for the same supplier and item on the current Annexure.
+        if current_supplier_key:
+            for award in awards:
+                (award_tender, award_item, award_description, award_supplier, cif_usd,
+                 unit_price, currency, award_po_date, record_type) = award
+                if (record_type != "ranked_candidate" or award_tender == exclude_tender
+                        or _bidder_key(award_supplier) != current_supplier_key
+                        or not _history_description_matches(item, award_item, award_description)):
+                    continue
+                po_date = (award_po_date or po_dates_by_tender.get(award_tender)
+                           or supplier_po_dates.get(award_tender))
+                matched_price = prior_price_usd(unit_price, currency, po_date)
+                if matched_price is None and cif_usd is not None:
+                    matched_price = float(cif_usd)
+                if matched_price is None:
+                    continue
+                found.append((award_tender, matched_price,
+                              po_date, "prior bid"))
+
+        # Older, manually entered CIF awards may predate purchase_order records.
+        for award in awards:
+            award_tender, award_item, award_description, award_supplier, cif_usd, _unit_price, _currency, award_po_date, record_type = award
+            if (record_type != "ranked_candidate" and cif_usd is not None
+                    and award_tender != exclude_tender
+                    and (not current_supplier_key or _bidder_key(award_supplier) == current_supplier_key)
+                    and _history_description_matches(item, award_item, award_description)):
+                found.append((award_tender, float(cif_usd), award_po_date, "manual entry"))
+
+        # Keep support for awarded foreign bids from installations that do not
+        # store a purchase-order record for every historic tender.
+        cur.execute("SELECT b.tender_no, b.description, b.unit_price, t.po_date, t.awarded_company FROM bid_line b "
                     "JOIN tender t ON t.tender_no=b.tender_no AND t.awarded_company=b.company "
                     "WHERE b.supply_type='foreign' AND b.currency='USD' AND b.unit_price IS NOT NULL")
-        found += [(a, float(p), d, "uploaded bid") for a, desc, p, d in cur.fetchall() if _norm(desc) == want]
-        cur.execute("SELECT tender_no, item, cif_usd, po_date FROM past_award")
-        found += [(a, float(p), d, "manual entry") for a, it, p, d in cur.fetchall() if _norm(it) == want]
+        found += [(a, float(p), d, "uploaded bid")
+                  for a, desc, p, d, supplier in cur.fetchall()
+                  if _history_description_matches(item, desc)
+                  and (not current_supplier_key or _bidder_key(supplier) == current_supplier_key)]
     found = [f for f in found if f[0] != exclude_tender]
+    # Multiple uploaded POs can refer to the same supplier/tender; retain one
+    # price per tender, preferring the most recent PO date.
     found.sort(key=lambda f: str(f[2] or ""), reverse=True)
+    unique = {}
+    for row in found:
+        unique.setdefault(row[0], row)
+    found = list(unique.values())
     return [{"tender_no": t, "cif_usd": p, "po_date": str(d) if d else None, "source": src,
-             "variation_pct": round((current_cif_usd - p) / p * 100, 2)} for t, p, d, src in found[:limit]]
+             "variation_pct": round((current_cif_usd - p) / p * 100, 2)
+             if current_cif_usd is not None and p else None}
+            for t, p, d, src in found[:limit]]
+
+
+def _history_description_matches(current, *candidates):
+    """Match item descriptions exactly or by a strong shared product/model signature."""
+    import re
+    current_norm = _norm(current)
+    if not current_norm:
+        return False
+    current_tokens = set(current_norm.split())
+    if current_norm in {_norm(candidate) for candidate in candidates if candidate}:
+        return True
+    current_ids = {token for token in current_tokens if re.search(r"\d", token)}
+    for candidate in candidates:
+        candidate_norm = _norm(candidate)
+        if not candidate_norm:
+            continue
+        candidate_tokens = set(candidate_norm.split())
+        shared = current_tokens & candidate_tokens
+        candidate_ids = {token for token in candidate_tokens if re.search(r"\d", token)}
+        if current_ids and candidate_ids and current_ids.isdisjoint(candidate_ids):
+            continue
+        if len(shared) >= 3 and len(shared) / min(len(current_tokens), len(candidate_tokens)) >= 0.75:
+            return True
+    return False
 
 
 def evaluation_block(item, current_cif_usd, closing_date, po_date):

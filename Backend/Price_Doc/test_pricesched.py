@@ -56,7 +56,9 @@ class PriceBidderIdentificationTests(unittest.TestCase):
         self.assertEqual(sheet["T5"].value, 326.1274)
         self.assertEqual(sheet["U5"].value, 322.3513)
         self.assertEqual(sheet["V4"].value, "PO Date : 06-08-2025")
-        self.assertEqual(sheet["V5"].value, 303.4132)
+        self.assertEqual(sheet["V5"].value, 297.1004)
+        self.assertEqual(sheet["W5"].value, 309.726)
+        self.assertEqual(sheet["X5"].value, 303.4132)
 
     @staticmethod
     def create_price_document(path, frank_value=None, frank_label="Official Frank", description="Test item"):
@@ -329,6 +331,44 @@ class PriceBidderIdentificationTests(unittest.TestCase):
             self.assertEqual(sheet["W9"].value, 41.5)
             self.assertIsNone(sheet["Y9"].value)
             self.assertIsNone(sheet["Z9"].value)
+
+    def test_foreign_usd_prices_fill_lkr_columns_at_closing_rate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "foreign-usd.docx"
+            doc = Document()
+            doc.add_paragraph("Official Frank: Acme Power (Pvt) Ltd")
+            doc.add_paragraph("Prices quoted in USD")
+            table = doc.add_table(rows=2, cols=10)
+            headers = [
+                "S/No", "Description", "Qty", "Country of Origin",
+                "FOB/FCA Unit Price", "FOB/FCA Total Cost", "Total Insurance",
+                "Total Freight", "Total CIF/CIP Cost", "Local Agent's Commission",
+            ]
+            values = ["1", "Optical module", "2", "China", "40", "80", "2", "3", "85", "0"]
+            for cell, value in zip(table.rows[0].cells, headers):
+                cell.text = value
+            for cell, value in zip(table.rows[1].cells, values):
+                cell.text = value
+            doc.save(path)
+
+            def fake_rate(day, kind):
+                return {"rate": {"buy": 318.5751, "sell": 326.1274}[kind]}
+
+            with patch.object(pricesched, "cbsl_web_rate", side_effect=fake_rate):
+                result = pricesched.run(
+                    [f"current={path}"], Path(directory) / "out", closing_date="12-05-2026"
+                )
+
+            self.assertEqual(result["rows"][0]["evaluated_total_lkr"], 28413.84)
+            self.assertIn("Converted to LKR", result["rows"][0]["conversion_note"])
+            sheet = __import__("openpyxl").load_workbook(result["file"], data_only=False).active
+            self.assertEqual(sheet["K9"].value, 42.5)
+            self.assertEqual(sheet["O9"].value, 42.5)
+            self.assertEqual(sheet["P9"].value, 13860.41)
+            self.assertEqual(sheet["R9"].value, 346.51)
+            self.assertEqual(sheet["S9"].value, 2494.87)
+            self.assertEqual(sheet["T9"].value, 14206.92)
+            self.assertEqual(sheet["U9"].value, 16701.79)
 
     def test_pdf_price_table_continuation_pages_are_read(self):
         with tempfile.TemporaryDirectory() as directory:
