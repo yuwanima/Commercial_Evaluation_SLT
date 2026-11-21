@@ -213,6 +213,16 @@ def commercial_evaluation():
     return send_from_directory(FRONTEND_DIR, "index.html")
 
 
+@app.get("/commercial-use-cases")
+def commercial_use_cases():
+    return send_from_directory(MAIN_FRONTEND_DIR, "use_cases.html")
+
+
+@app.get("/use-cases.css")
+def use_cases_stylesheet():
+    return send_from_directory(MAIN_FRONTEND_DIR, "use-cases.css")
+
+
 @app.get("/store-documents")
 def store_documents_page():
     return send_from_directory(MAIN_FRONTEND_DIR, "store_documents.html")
